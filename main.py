@@ -18,6 +18,12 @@ pos_z = 0.0
 # Escala
 scale = 1.0
 
+#Projeção
+projecao_ortografica = False
+
+# Modo de renderização do cubo
+modo_wireframe = False  # False = sólido, True = wireframe
+
 def init():
     """Configurações iniciais do OpenGL"""
     # Cor de fundo (Preto: R=0, G=0, B=0, Alpha=1)
@@ -52,35 +58,51 @@ def display():
     
     # 5. Desenha o Objeto
     glColor3f(1.0, 0.0, 0.0) # Define cor Vermelha para o objeto
-    glutSolidTeapot(1.0)     # Primitiva pronta do GLUT (Bule)
-    # glutSolidCube(1.0)     # Alternativa: Cubo
+    if modo_wireframe:
+        glutWireCube(1.0)     # Cubo wireframe (apenas arestas)
+    else:
+        glutSolidCube(1.0)    # Cubo sólido (preenchido)
     
     glPopMatrix() # Restaura a matriz para não afetar outros objetos futuros
     
     # 6. Troca os buffers (Double Buffering) para mostrar o desenho
     glutSwapBuffers()
 
+
 def reshape(w, h):
-    """Chamada quando a janela é redimensionada"""
-    # Evita divisão por zero
-    if h == 0: h = 1
+    """Chamada quando a janela é redimensionada ou mudamos a projeção"""
+    global largura_janela, altura_janela # Guardar para usar depois se precisar
+    largura_janela = w
+    altura_janela = h
     
-    # Define a área de desenho na janela inteira
+    if h == 0: h = 1
+    aspecto = w / h
+    
     glViewport(0, 0, w, h)
     
-    # Configura a Projeção (Lente da Câmera)
+    # Entra no modo de Projeção (Lente da Câmera)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
     
-    # Projeção Perspectiva (fov, aspect, near, far)
-    gluPerspective(45, w/h, 0.1, 50.0)
+    if projecao_ortografica:
+        # Projeção Ortográfica (Caixa retangular)
+        # glOrtho(left, right, bottom, top, near, far)
+        # Ajustamos o volume para garantir que o objeto caiba na tela
+        if w <= h:
+            glOrtho(-10, 10, -10*h/w, 10*h/w, 0.1, 100.0)
+        else:
+            glOrtho(-10*w/h, 10*w/h, -10, 10, 0.1, 100.0)
+    else:
+        # Projeção Perspectiva (Cone de visão)
+        # gluPerspective(fovy, aspect, zNear, zFar)
+        gluPerspective(45, aspecto, 0.1, 100.0)
     
-    # Volta para o modo de Modelagem (para mover objetos)
+    # Volta para o modo Modelagem (Mundo)
     glMatrixMode(GL_MODELVIEW)
 
 def keyboard(key, x, y):
     """Controle por Teclas (Rotação e Escala)"""
-    global rot_x, rot_y, scale
+    global rot_x, rot_y, scale, projecao_ortografica, modo_wireframe
     
     # Rotação com WASD
     if key == b'w' or key == b'W':
@@ -98,9 +120,22 @@ def keyboard(key, x, y):
     elif key == b'-':
         scale -= 0.1
         if scale < 0.1: scale = 0.1
+    
+    elif key == b'p' or key == b'P':
+        projecao_ortografica = not projecao_ortografica
+        # Força o re-cálculo da matriz de projeção usando o tamanho atual da janela
+        # Usamos glutGet para pegar o tamanho atual da janela
+        w = glutGet(GLUT_WINDOW_WIDTH)
+        h = glutGet(GLUT_WINDOW_HEIGHT)
+        reshape(w, h)
+        print("Projeção: " + ("Ortográfica" if projecao_ortografica else "Perspectiva"))
+    
+    elif key == b'f' or key == b'F':
+        modo_wireframe = not modo_wireframe
+        print("Modo: " + ("Wireframe" if modo_wireframe else "Sólido"))
         
-    glutPostRedisplay() # Pede para redesenhar a tela
-
+    glutPostRedisplay()
+        
 def special_keys(key, x, y):
     """Controle por Teclas Especiais (Setas para Mover)"""
     global pos_x, pos_y
@@ -131,7 +166,7 @@ def main():
     
     # 3. Cria Janela
     glutInitWindowSize(800, 600)
-    glutCreateWindow(b"Trabalho CG - Fase 1 e 2")
+    glutCreateWindow(b"Trabalho CG 3D")
     
     # 4. Configurações iniciais do OpenGL (cor, depth)
     init()
@@ -144,7 +179,7 @@ def main():
     
     # 6. Entra no loop infinito
     print("Controles:")
-    print("Setas: Mover | WASD: Girar | +/-: Zoom")
+    print("Setas: Mover | WASD: Girar | +/-: Zoom | P: Projeção | F: Wireframe/Sólido")
     glutMainLoop()
 
 if __name__ == "__main__":
