@@ -392,10 +392,6 @@ def mouse_motion(x, y):
     
     glutPostRedisplay()
 
-def passive_motion(x, y):
-    """Função chamada quando o mouse se move sem botões pressionados"""
-    mouse_motion(x, y)
-
 def special_keys(key, x, y):
     global pos_x, pos_y
     if key == GLUT_KEY_UP: pos_y += 0.1
@@ -414,8 +410,7 @@ def main():
     glutReshapeFunc(reshape)
     glutKeyboardFunc(keyboard)
     glutSpecialFunc(special_keys)
-    glutPassiveMotionFunc(passive_motion)  # Para capturar movimento do mouse
-    glutMotionFunc(mouse_motion)  # Para capturar movimento do mouse com botão pressionado
+    glutPassiveMotionFunc(mouse_motion)  # Para capturar movimento do mouse
     
     print("--- CONTROLES ---")
     print("[0] Alternar entre Modo Câmera e Modo Objeto")
