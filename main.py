@@ -39,7 +39,13 @@ modo_wireframe = False  # True=Wireframe, False=Solid
 # Estado do Objeto Selecionado
 # 1=Esfera, 2=Cubo, 3=Cone, 4=Torus, 5=Teapot, 6=Modo Extrusão
 objeto_selecionado = 1  # Começa com esfera
-modo_extrusao = False   # True quando estiver no modo extrusão 
+modo_extrusao = False   # True quando estiver no modo extrusão
+
+# Estado do Modo Extrusão
+perfil_extrusao = []  # Lista de pontos 2D [(x, y), ...] que formam o perfil
+altura_extrusao = 2.0  # Altura da extrusão ao longo do eixo Z
+num_segmentos_extrusao = 20  # Número de segmentos ao longo da altura
+extrusao_ativa = False  # True quando a extrusão 3D está ativa, False mostra apenas o perfil 2D 
 
 def init():
     """Configurações iniciais do OpenGL"""
@@ -87,15 +93,193 @@ def configurar_iluminacao_renderizacao():
         glMaterialfv(GL_FRONT, GL_SPECULAR, [1, 1, 1, 1])
         glMaterialf(GL_FRONT, GL_SHININESS, 60.0)
 
+def calcular_normal_face(p1, p2, p3):
+    """Calcula a normal de uma face triangular"""
+    v1 = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]]
+    v2 = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]]
+    
+    # Produto vetorial
+    nx = v1[1] * v2[2] - v1[2] * v2[1]
+    ny = v1[2] * v2[0] - v1[0] * v2[2]
+    nz = v1[0] * v2[1] - v1[1] * v2[0]
+    
+    # Normalizar
+    length = math.sqrt(nx*nx + ny*ny + nz*nz)
+    if length > 0:
+        return [nx/length, ny/length, nz/length]
+    return [0, 0, 1]
+
+def desenhar_perfil_2d():
+    """Desenha o perfil 2D como linhas no plano XY"""
+    global perfil_extrusao
+    
+    if len(perfil_extrusao) < 2:
+        return
+    
+    glDisable(GL_LIGHTING)
+    glColor3f(1.0, 1.0, 0.0)  # Amarelo para o perfil 2D
+    glLineWidth(2.0)
+    
+    # Desenha as linhas conectando os pontos
+    glBegin(GL_LINE_STRIP)
+    for ponto in perfil_extrusao:
+        glVertex3f(ponto[0], ponto[1], 0.0)
+    glEnd()
+    
+    # Desenha pontos como pequenas esferas
+    for ponto in perfil_extrusao:
+        glPushMatrix()
+        glTranslatef(ponto[0], ponto[1], 0.0)
+        glutSolidSphere(0.05, 8, 8)
+        glPopMatrix()
+    
+    glEnable(GL_LIGHTING)
+    glLineWidth(1.0)
+
+def desenhar_extrusao():
+    """Desenha o objeto extrudado a partir do perfil"""
+    global perfil_extrusao, altura_extrusao, num_segmentos_extrusao, modo_wireframe, extrusao_ativa, modelo_iluminacao
+    
+    # Se a extrusão não está ativa, mostra apenas o perfil 2D
+    if not extrusao_ativa:
+        desenhar_perfil_2d()
+        return
+    
+    if len(perfil_extrusao) < 3:
+        # Se não há pontos suficientes, mostra apenas o perfil 2D
+        desenhar_perfil_2d()
+        return
+    
+    glColor3f(0.0, 0.8, 0.3)  # Verde para o objeto extrudado
+    
+    # Fechar o perfil se não estiver fechado
+    perfil = perfil_extrusao.copy()
+    if perfil[0] != perfil[-1]:
+        perfil.append(perfil[0])
+    
+    num_pontos = len(perfil)
+    num_segmentos = num_segmentos_extrusao
+    
+    if modo_wireframe:
+        glDisable(GL_LIGHTING)
+        # Desenha apenas as arestas
+        for i in range(num_segmentos + 1):
+            z = (i / num_segmentos) * altura_extrusao
+            glBegin(GL_LINE_LOOP)
+            for ponto in perfil:
+                glVertex3f(ponto[0], ponto[1], z)
+            glEnd()
+        
+        # Desenha linhas verticais conectando os pontos
+        for ponto in perfil:
+            glBegin(GL_LINE_STRIP)
+            for i in range(num_segmentos + 1):
+                z = (i / num_segmentos) * altura_extrusao
+                glVertex3f(ponto[0], ponto[1], z)
+            glEnd()
+        glEnable(GL_LIGHTING)
+    else:
+        # Desenha faces sólidas
+        glBegin(GL_TRIANGLES)
+        
+        # Faces laterais (ao longo da extrusão)
+        for i in range(num_segmentos):
+            z1 = (i / num_segmentos) * altura_extrusao
+            z2 = ((i + 1) / num_segmentos) * altura_extrusao
+            
+            for j in range(num_pontos - 1):
+                # Dois triângulos por face lateral
+                p1 = [perfil[j][0], perfil[j][1], z1]
+                p2 = [perfil[j+1][0], perfil[j+1][1], z1]
+                p3 = [perfil[j][0], perfil[j][1], z2]
+                p4 = [perfil[j+1][0], perfil[j+1][1], z2]
+                
+                # Calcula normais para melhor iluminação
+                # Normal do triângulo 1
+                n1 = calcular_normal_face(p1, p2, p3)
+                # Normal do triângulo 2
+                n2 = calcular_normal_face(p2, p4, p3)
+                
+                # Para Gouraud/Phong, usa normais por vértice
+                # Para Flat, usa normal da face
+                if modelo_iluminacao == 0:  # Flat
+                    # Triângulo 1
+                    glNormal3f(n1[0], n1[1], n1[2])
+                    glVertex3f(p1[0], p1[1], p1[2])
+                    glVertex3f(p2[0], p2[1], p2[2])
+                    glVertex3f(p3[0], p3[1], p3[2])
+                    
+                    # Triângulo 2
+                    glNormal3f(n2[0], n2[1], n2[2])
+                    glVertex3f(p2[0], p2[1], p2[2])
+                    glVertex3f(p4[0], p4[1], p4[2])
+                    glVertex3f(p3[0], p3[1], p3[2])
+                else:  # Gouraud ou Phong - normais por vértice
+                    # Triângulo 1 - cada vértice com sua normal
+                    glNormal3f(n1[0], n1[1], n1[2])
+                    glVertex3f(p1[0], p1[1], p1[2])
+                    glNormal3f(n1[0], n1[1], n1[2])
+                    glVertex3f(p2[0], p2[1], p2[2])
+                    glNormal3f(n1[0], n1[1], n1[2])
+                    glVertex3f(p3[0], p3[1], p3[2])
+                    
+                    # Triângulo 2
+                    glNormal3f(n2[0], n2[1], n2[2])
+                    glVertex3f(p2[0], p2[1], p2[2])
+                    glNormal3f(n2[0], n2[1], n2[2])
+                    glVertex3f(p4[0], p4[1], p4[2])
+                    glNormal3f(n2[0], n2[1], n2[2])
+                    glVertex3f(p3[0], p3[1], p3[2])
+        
+        # Face inferior (base)
+        if num_pontos > 2:
+            z_base = 0.0
+            for j in range(1, num_pontos - 1):
+                p1 = [perfil[0][0], perfil[0][1], z_base]
+                p2 = [perfil[j][0], perfil[j][1], z_base]
+                p3 = [perfil[j+1][0], perfil[j+1][1], z_base]
+                
+                normal = calcular_normal_face(p1, p3, p2)  # Invertido para normal apontar para baixo
+                glNormal3f(normal[0], normal[1], normal[2])
+                glVertex3f(p1[0], p1[1], p1[2])
+                glVertex3f(p2[0], p2[1], p2[2])
+                glVertex3f(p3[0], p3[1], p3[2])
+        
+        # Face superior (topo)
+        if num_pontos > 2:
+            z_topo = altura_extrusao
+            for j in range(1, num_pontos - 1):
+                p1 = [perfil[0][0], perfil[0][1], z_topo]
+                p2 = [perfil[j][0], perfil[j][1], z_topo]
+                p3 = [perfil[j+1][0], perfil[j+1][1], z_topo]
+                
+                normal = calcular_normal_face(p1, p2, p3)
+                glNormal3f(normal[0], normal[1], normal[2])
+                glVertex3f(p1[0], p1[1], p1[2])
+                glVertex3f(p2[0], p2[1], p2[2])
+                glVertex3f(p3[0], p3[1], p3[2])
+        
+        glEnd()
+
+def adicionar_ponto_perfil(x, y):
+    """Adiciona um ponto ao perfil de extrusão"""
+    global perfil_extrusao
+    # Adiciona as coordenadas diretamente (sem escala adicional)
+    perfil_extrusao.append((x, y))
+    print(f"Ponto adicionado: ({x:.2f}, {y:.2f}). Total: {len(perfil_extrusao)} pontos")
+
+def limpar_perfil():
+    """Limpa o perfil de extrusão"""
+    global perfil_extrusao
+    perfil_extrusao = []
+    print("Perfil limpo")
+
 def desenhar_objeto():
     """Desenha o objeto padrão selecionado"""
     global objeto_selecionado, modo_wireframe, modo_extrusao
     
     if modo_extrusao:
-        # TODO: Implementar desenho de extrusão aqui
-        glColor3f(1.0, 0.5, 0.0) # Laranja para diferenciar
-        glutSolidSphere(1.0, 10, 10)  # Placeholder
-        print("Modo Extrusão (A ser implementado)")
+        desenhar_extrusao()
         return
     
     glColor3f(0.0, 0.5, 1.0) # Azul
@@ -255,7 +439,7 @@ def reshape(w, h):
 def keyboard(key, x, y):
     global rot_x, rot_y, scale, projecao_ortografica, modelo_iluminacao
     global luz_x, luz_y, luz_z, modo_wireframe
-    global objeto_selecionado, modo_extrusao
+    global objeto_selecionado, modo_extrusao, extrusao_ativa
     global modo_camera, mouse_capturado
     
     # Alternar entre modo câmera e modo objeto
@@ -293,26 +477,33 @@ def keyboard(key, x, y):
     if key == b'1':
         objeto_selecionado = 1
         modo_extrusao = False
+        extrusao_ativa = False
         print("Objeto: Esfera")
     elif key == b'2':
         objeto_selecionado = 2
         modo_extrusao = False
+        extrusao_ativa = False
         print("Objeto: Cubo")
     elif key == b'3':
         objeto_selecionado = 3
         modo_extrusao = False
+        extrusao_ativa = False
         print("Objeto: Cone")
     elif key == b'4':
         objeto_selecionado = 4
         modo_extrusao = False
+        extrusao_ativa = False
         print("Objeto: Torus")
     elif key == b'5':
         objeto_selecionado = 5
         modo_extrusao = False
+        extrusao_ativa = False
         print("Objeto: Teapot")
     elif key == b'6':
         modo_extrusao = True
-        print("Modo Extrusão (A ser implementado)")
+        extrusao_ativa = False  # Começa com extrusão desativada para ver o perfil 2D
+        print("Modo Extrusão ativado - Clique com o mouse para adicionar pontos ao perfil")
+        print("Controles: [E] Ativar/Desativar extrusão 3D | [C] Limpar perfil | [H] Aumentar altura | [N] Diminuir altura")
     
     # Controles WASD - dependem do modo atual
     if modo_camera:
@@ -356,6 +547,28 @@ def keyboard(key, x, y):
     elif key == b'f' or key == b'F': # F de Fill (Wireframe/Solid)
         modo_wireframe = not modo_wireframe
         print(f"Renderização: {'Wireframe' if modo_wireframe else 'Solid'}")
+    
+    # Controles do Modo Extrusão
+    if modo_extrusao:
+        if key == b'e' or key == b'E':
+            extrusao_ativa = not extrusao_ativa
+            if extrusao_ativa:
+                print("Extrusão 3D ATIVADA")
+            else:
+                print("Extrusão 3D DESATIVADA - Modo edição de perfil 2D")
+            glutPostRedisplay()
+        elif key == b'c' or key == b'C':
+            limpar_perfil()
+            extrusao_ativa = False  # Desativa extrusão ao limpar
+            glutPostRedisplay()
+        elif key == b'h' or key == b'H':
+            altura_extrusao += 0.2
+            print(f"Altura extrusão: {altura_extrusao:.2f}")
+            glutPostRedisplay()
+        elif key == b'n' or key == b'N':
+            altura_extrusao = max(0.1, altura_extrusao - 0.2)
+            print(f"Altura extrusão: {altura_extrusao:.2f}")
+            glutPostRedisplay()
 
     glutPostRedisplay()
 
@@ -400,6 +613,43 @@ def special_keys(key, x, y):
     elif key == GLUT_KEY_RIGHT: pos_x += 0.1
     glutPostRedisplay()
 
+def mouse_click_extrusao(button, state, x, y):
+    """Manipula cliques do mouse no modo extrusão"""
+    global modo_extrusao, perfil_extrusao, projecao_ortografica
+    
+    if not modo_extrusao:
+        return
+    
+    if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
+        # Converte coordenadas da tela para coordenadas do mundo
+        width = glutGet(GLUT_WINDOW_WIDTH)
+        height = glutGet(GLUT_WINDOW_HEIGHT)
+        aspecto = float(width) / float(height)
+        
+        # Normaliza para [-1, 1]
+        # GLUT usa origem no canto superior esquerdo, OpenGL usa no canto inferior esquerdo
+        x_norm = (x / width) * 2.0 - 1.0
+        y_norm = ((height - y) / height) * 2.0 - 1.0  # Inverte Y corretamente
+        
+        # Ajusta pelo aspect ratio e usa escala que corresponde ao glOrtho/gluPerspective
+        # Escala reduzida para maior precisão (5.0 ao invés de 10.0)
+        escala = 5.0
+        if projecao_ortografica:
+            if width <= height:
+                x_world = x_norm * escala
+                y_world = y_norm * (escala / aspecto)
+            else:
+                x_world = x_norm * (escala * aspecto)
+                y_world = y_norm * escala
+        else:
+            # Para perspectiva, aproximação simples
+            x_world = x_norm * escala * aspecto
+            y_world = y_norm * escala
+        
+        # Adiciona diretamente sem escala extra
+        adicionar_ponto_perfil(x_world, y_world)
+        glutPostRedisplay()
+
 def main():
     glutInit(sys.argv)
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
@@ -411,16 +661,21 @@ def main():
     glutKeyboardFunc(keyboard)
     glutSpecialFunc(special_keys)
     glutPassiveMotionFunc(mouse_motion)  # Para capturar movimento do mouse
+    glutMouseFunc(mouse_click_extrusao)  # Para capturar cliques do mouse no modo extrusão
     
     print("--- CONTROLES ---")
     print("[0] Alternar entre Modo Câmera e Modo Objeto")
     print("[1-5] Selecionar Objeto Padrão | [6] Modo Extrusão")
     print("[WASD] Girar Objeto (Modo Objeto) | Mover Câmera (Modo Câmera)")
-    print("[Mouse] Olhar ao redor (Modo Câmera)")
+    print("[Mouse] Olhar ao redor (Modo Câmera) | Clique para adicionar pontos (Modo Extrusão)")
     print("[Setas] Mover Objeto")
     print("[IJKL] Mover Luz     | [UO] Luz Z (Fundo/Frente)")
     print("[M] Modo Iluminação (Flat/Gouraud/Phong)")
     print("[P] Projeção         | [F] Wireframe/Solid")
+    print("--- MODO EXTRUSÃO ---")
+    print("[Clique Esquerdo] Adicionar ponto ao perfil")
+    print("[E] Ativar/Desativar extrusão 3D (ver perfil 2D ou objeto 3D)")
+    print("[C] Limpar perfil | [H] Aumentar altura | [N] Diminuir altura")
     
     glutMainLoop()
 
