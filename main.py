@@ -20,11 +20,11 @@ projecao_ortografica = False  # False=Perspectiva, True=Ortográfica
 
 # Estado da Câmera em Primeira Pessoa
 modo_camera = False  # False=Controla Objeto, True=Controla Câmera
-camera_x, camera_y, camera_z = 0.0, 0.0, 10.0  # Posição da câmera
+camera_x, camera_y, camera_z = 0.0, 0.0, 10.0
 camera_yaw = 0.0    # Rotação horizontal (esquerda/direita)
 camera_pitch = 0.0  # Rotação vertical (cima/baixo)
-velocidade_camera = 0.1  # Velocidade de movimento da câmera
-sensibilidade_mouse = 0.1  # Sensibilidade do mouse
+velocidade_camera = 0.1
+sensibilidade_mouse = 0.1
 ultimo_mouse_x = 0
 ultimo_mouse_y = 0
 mouse_capturado = False
@@ -34,18 +34,18 @@ mouse_capturado = False
 modelo_iluminacao = 0
 
 # Estado de Renderização
-modo_wireframe = False  # True=Wireframe, False=Solid
+modo_wireframe = False
 
 # Estado do Objeto Selecionado
 # 1=Esfera, 2=Cubo, 3=Cone, 4=Torus, 5=Teapot, 6=Modo Extrusão
 objeto_selecionado = 1  # Começa com esfera
-modo_extrusao = False   # True quando estiver no modo extrusão
+modo_extrusao = False
 
 # Estado do Modo Extrusão
-perfil_extrusao = []  # Lista de pontos 2D [(x, y), ...] que formam o perfil
-altura_extrusao = 2.0  # Altura da extrusão ao longo do eixo Z
-num_segmentos_extrusao = 20  # Número de segmentos ao longo da altura
-extrusao_ativa = False  # True quando a extrusão 3D está ativa, False mostra apenas o perfil 2D 
+perfil_extrusao = []
+altura_extrusao = 2.0
+num_segmentos_extrusao = 20
+extrusao_ativa = False
 
 def init():
     """Configurações iniciais do OpenGL"""
@@ -264,7 +264,7 @@ def desenhar_extrusao():
 def adicionar_ponto_perfil(x, y):
     """Adiciona um ponto ao perfil de extrusão"""
     global perfil_extrusao
-    # Adiciona as coordenadas diretamente (sem escala adicional)
+    # Adiciona as coordenadas diretamente
     perfil_extrusao.append((x, y))
     print(f"Ponto adicionado: ({x:.2f}, {y:.2f}). Total: {len(perfil_extrusao)} pontos")
 
@@ -342,9 +342,8 @@ def mover_camera_frente():
     global camera_x, camera_y, camera_z, camera_yaw, camera_pitch, velocidade_camera
     
     yaw_rad = math.radians(camera_yaw)
-    pitch_rad = math.radians(camera_pitch)
     
-    # Move apenas no plano horizontal (ignora pitch para movimento)
+    # Move apenas no plano horizontal
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
 
@@ -353,9 +352,8 @@ def mover_camera_tras():
     global camera_x, camera_y, camera_z, camera_yaw, camera_pitch, velocidade_camera
     
     yaw_rad = math.radians(camera_yaw)
-    pitch_rad = math.radians(camera_pitch)
     
-    # Move apenas no plano horizontal (ignora pitch para movimento)
+    # Move apenas no plano horizontal
     camera_x -= math.sin(yaw_rad) * velocidade_camera
     camera_z -= math.cos(yaw_rad) * velocidade_camera
 
@@ -363,7 +361,7 @@ def mover_camera_esquerda():
     """Move a câmera para a esquerda"""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
     
-    yaw_rad = math.radians(camera_yaw + 90)  # 90 graus à direita (vetor perpendicular à esquerda)
+    yaw_rad = math.radians(camera_yaw + 90)  # 90 graus à direita
     
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
@@ -372,12 +370,15 @@ def mover_camera_direita():
     """Move a câmera para a direita"""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
     
-    yaw_rad = math.radians(camera_yaw - 90)  # 90 graus à esquerda (vetor perpendicular à direita)
+    yaw_rad = math.radians(camera_yaw - 90)  # 90 graus à esquerda
     
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
 
 def display():
+    global modo_camera, luz_x, luz_y, luz_z
+    global pos_x, pos_y, pos_z, rot_x, rot_y, scale
+    
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
     
@@ -388,16 +389,16 @@ def display():
         # Câmera fixa (modo original)
         gluLookAt(0.0, 0.0, 10.0,  0.0, 0.0, 0.0,  0.0, 1.0, 0.0)
     
-    # 2. Posicionar a Luz (MÓVEL)
+    # 2. Posicionar a Luz
     # Usamos as variáveis globais luz_x, luz_y, luz_z
     posicao_luz = [luz_x, luz_y, luz_z, 1.0]
     glLightfv(GL_LIGHT0, GL_POSITION, posicao_luz)
     
-    # Desenha esfera amarela representando a luz (Debug Visual)
+    # Desenha esfera amarela representando a luz
     glPushMatrix()
     glTranslatef(luz_x, luz_y, luz_z)
     glDisable(GL_LIGHTING)
-    glColor3f(1.0, 1.0, 0.0) # Amarelo
+    glColor3f(1.0, 1.0, 0.0)
     glutSolidSphere(0.2, 10, 10)
     glEnable(GL_LIGHTING)
     glPopMatrix()
@@ -418,6 +419,8 @@ def display():
     glutSwapBuffers()
 
 def reshape(w, h):
+    global projecao_ortografica
+    
     if h == 0: h = 1
     glViewport(0, 0, w, h)
     glMatrixMode(GL_PROJECTION)
@@ -441,6 +444,9 @@ def keyboard(key, x, y):
     global luz_x, luz_y, luz_z, modo_wireframe
     global objeto_selecionado, modo_extrusao, extrusao_ativa
     global modo_camera, mouse_capturado
+    global camera_x, camera_y, camera_z, camera_yaw, camera_pitch
+    global ultimo_mouse_x, ultimo_mouse_y
+    global altura_extrusao
     
     # Alternar entre modo câmera e modo objeto
     if key == b'0':
@@ -448,8 +454,6 @@ def keyboard(key, x, y):
         mouse_capturado = modo_camera
         if modo_camera:
             print("Modo: CÂMERA (WASD + Mouse)")
-            # Calcula yaw e pitch para olhar para o objeto (0, 0, 0)
-            global camera_yaw, camera_pitch
             # Vetor da câmera para o objeto
             dx = 0.0 - camera_x
             dy = 0.0 - camera_y
@@ -463,7 +467,6 @@ def keyboard(key, x, y):
             # Captura o mouse quando entra no modo câmera
             glutSetCursor(GLUT_CURSOR_NONE)
             # Inicializa posição do mouse
-            global ultimo_mouse_x, ultimo_mouse_y
             ultimo_mouse_x = glutGet(GLUT_WINDOW_WIDTH) // 2
             ultimo_mouse_y = glutGet(GLUT_WINDOW_HEIGHT) // 2
             glutWarpPointer(ultimo_mouse_x, ultimo_mouse_y)
@@ -517,7 +520,7 @@ def keyboard(key, x, y):
         elif key == b'd' or key == b'D':
             mover_camera_direita()
     else:
-        # Modo Objeto: WASD gira o objeto (comportamento original)
+        # Modo Objeto: WASD gira o objeto
         if key == b'w' or key == b'W': rot_x -= 5.0
         elif key == b's' or key == b'S': rot_x += 5.0
         elif key == b'a' or key == b'A': rot_y -= 5.0
@@ -530,8 +533,8 @@ def keyboard(key, x, y):
     # Luz (IJKL - Movimento da Fonte de Luz)
     elif key == b'i' or key == b'I': luz_y += 0.5
     elif key == b'k' or key == b'K': luz_y -= 0.5
-    elif key == b'j' or key == b'J': luz_x -= 0.5  # J move para esquerda
-    elif key == b'l' or key == b'L': luz_x += 0.5  # L move para direita
+    elif key == b'j' or key == b'J': luz_x -= 0.5
+    elif key == b'l' or key == b'L': luz_x += 0.5
     elif key == b'u' or key == b'U': luz_z -= 0.5
     elif key == b'o' or key == b'O': luz_z += 0.5
     
@@ -540,11 +543,11 @@ def keyboard(key, x, y):
         projecao_ortografica = not projecao_ortografica
         reshape(glutGet(GLUT_WINDOW_WIDTH), glutGet(GLUT_WINDOW_HEIGHT))
         
-    elif key == b'm' or key == b'M': # M de Modo de Iluminação
+    elif key == b'm' or key == b'M':
         modelo_iluminacao = (modelo_iluminacao + 1) % 3
         print(f"Modo: {modelo_iluminacao}")
     
-    elif key == b'f' or key == b'F': # F de Fill (Wireframe/Solid)
+    elif key == b'f' or key == b'F':
         modo_wireframe = not modo_wireframe
         print(f"Renderização: {'Wireframe' if modo_wireframe else 'Solid'}")
     
@@ -559,7 +562,7 @@ def keyboard(key, x, y):
             glutPostRedisplay()
         elif key == b'c' or key == b'C':
             limpar_perfil()
-            extrusao_ativa = False  # Desativa extrusão ao limpar
+            extrusao_ativa = False
             glutPostRedisplay()
         elif key == b'h' or key == b'H':
             altura_extrusao += 0.2
@@ -575,7 +578,7 @@ def keyboard(key, x, y):
 def mouse_motion(x, y):
     """Função chamada quando o mouse se move"""
     global camera_yaw, camera_pitch, ultimo_mouse_x, ultimo_mouse_y
-    global mouse_capturado, sensibilidade_mouse
+    global mouse_capturado, sensibilidade_mouse, modo_camera
     
     if not modo_camera or not mouse_capturado:
         return
@@ -585,13 +588,13 @@ def mouse_motion(x, y):
     dy = y - ultimo_mouse_y
     
     # Atualiza yaw e pitch
-    camera_yaw -= dx * sensibilidade_mouse  # Invertido para corrigir direção
-    camera_pitch -= dy * sensibilidade_mouse  # Mouse para baixo = olhar para baixo
+    camera_yaw -= dx * sensibilidade_mouse
+    camera_pitch -= dy * sensibilidade_mouse
     
     # Limita o pitch para evitar rotação completa
     camera_pitch = max(-89.0, min(89.0, camera_pitch))
     
-    # Mantém o mouse no centro da tela (opcional, para melhor controle)
+    # Mantém o mouse no centro da tela
     centro_x = glutGet(GLUT_WINDOW_WIDTH) // 2
     centro_y = glutGet(GLUT_WINDOW_HEIGHT) // 2
     
@@ -632,7 +635,6 @@ def mouse_click_extrusao(button, state, x, y):
         y_norm = ((height - y) / height) * 2.0 - 1.0  # Inverte Y corretamente
         
         # Ajusta pelo aspect ratio e usa escala que corresponde ao glOrtho/gluPerspective
-        # Escala reduzida para maior precisão (5.0 ao invés de 10.0)
         escala = 5.0
         if projecao_ortografica:
             if width <= height:
