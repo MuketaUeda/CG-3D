@@ -21,8 +21,8 @@ projecao_ortografica = False  # False=Perspectiva, True=Ortográfica
 # Estado da Câmera em Primeira Pessoa
 modo_camera = False  # False=Controla Objeto, True=Controla Câmera
 camera_x, camera_y, camera_z = 0.0, 0.0, 10.0
-camera_yaw = 0.0    # Rotação horizontal (esquerda/direita)
-camera_pitch = 0.0  # Rotação vertical (cima/baixo)
+camera_yaw = 0.0
+camera_pitch = 0.0
 velocidade_camera = 0.1
 sensibilidade_mouse = 0.1
 ultimo_mouse_x = 0
@@ -30,7 +30,7 @@ ultimo_mouse_y = 0
 mouse_capturado = False
 
 # Estado da Iluminação
-# 0: Flat, 1: Gouraud (Suave), 2: Phong (Suave + Brilho)
+# 0: Flat, 1: Gouraud (Suave), 2: Phong (Scanline por triângulo)
 modelo_iluminacao = 0
 
 # Estado de Renderização
@@ -38,7 +38,7 @@ modo_wireframe = False
 
 # Estado do Objeto Selecionado
 # 1=Esfera, 2=Cubo, 3=Cone, 4=Torus, 5=Teapot, 6=Modo Extrusão
-objeto_selecionado = 1  # Começa com esfera
+objeto_selecionado = 1
 modo_extrusao = False
 
 # Estado do Modo Extrusão
@@ -47,74 +47,230 @@ altura_extrusao = 2.0
 num_segmentos_extrusao = 20
 extrusao_ativa = False
 
-# === NOVO: Mostrar comandos na tela ===
+# Mostrar comandos na tela
 mostrar_comandos = True
 
 
+# ============================================================
+#   PROJEÇÃO 3D → 2D
+# ============================================================
+def project_to_screen(x, y, z):
+    """Projeção ponto 3D -> coordenadas de tela (x,y)"""
+    model = glGetDoublev(GL_MODELVIEW_MATRIX)
+    proj = glGetDoublev(GL_PROJECTION_MATRIX)
+    viewport = glGetIntegerv(GL_VIEWPORT)
+
+    winX, winY, winZ = gluProject(x, y, z, model, proj, viewport)
+    winY = viewport[3] - winY  # ajustar eixo Y
+    return winX, winY, winZ
+
+
+# ============================================================
+#   ILUMINAÇÃO PHONG POR PIXEL (software)
+# ============================================================
+def phong_shading_point(position, normal, base_color):
+    """Calcula iluminação Phong por pixel usando normal interpolada."""
+    global luz_x, luz_y, luz_z, modo_camera
+    global camera_x, camera_y, camera_z
+
+    # Luz (L)
+    L = [luz_x - position[0], luz_y - position[1], luz_z - position[2]]
+    L_len = math.sqrt(L[0]**2 + L[1]**2 + L[2]**2)
+    if L_len != 0:
+        L = [L[0]/L_len, L[1]/L_len, L[2]/L_len]
+
+    # Normal (N)
+    N = list(normal)
+    N_len = math.sqrt(N[0]**2 + N[1]**2 + N[2]**2)
+    if N_len != 0:
+        N = [N[0]/N_len, N[1]/N_len, N[2]/N_len]
+    else:
+        N = [0.0, 0.0, 1.0]
+
+    # Posição da câmera
+    if modo_camera:
+        eye = [camera_x, camera_y, camera_z]
+    else:
+        eye = [0.0, 0.0, 10.0]
+
+    # Coeficientes Phong
+    ka = 0.2
+    kd = 0.7
+    ks = 0.8
+    shininess = 32
+
+    # Ambiente
+    I = ka
+
+    # Difuso
+    NdotL = max(0.0, N[0]*L[0] + N[1]*L[1] + N[2]*L[2])
+    I += kd * NdotL
+
+    # Especular
+    if NdotL > 0:
+        R = [
+            2*NdotL*N[0] - L[0],
+            2*NdotL*N[1] - L[1],
+            2*NdotL*N[2] - L[2]
+        ]
+        V = [eye[0]-position[0], eye[1]-position[1], eye[2]-position[2]]
+        V_len = math.sqrt(V[0]**2 + V[1]**2 + V[2]**2)
+        if V_len != 0:
+            V = [V[0]/V_len, V[1]/V_len, V[2]/V_len]
+        RdotV = max(0.0, R[0]*V[0] + R[1]*V[1] + R[2]*V[2])
+        I += ks * (RdotV ** shininess)
+
+    I = min(1.0, max(0.0, I))
+
+    r = I * base_color[0]
+    g = I * base_color[1]
+    b = I * base_color[2]
+    return (r, g, b)
+
+
+# ============================================================
+#   SCANLINE + PHONG PARA TRIÂNGULO
+# ============================================================
+def scanline_phong_triangle(p1, n1, p2, n2, p3, n3, base_color):
+    """
+    Triângulo em coordenadas 3D, com normais por vértice.
+    1) Projeta para 2D
+    2) Faz varredura em y (scanline) do triângulo
+    3) Interpola posição 3D + normal
+    4) Calcula iluminação Phong por pixel
+    """
+    # Projeção
+    s1 = project_to_screen(*p1)
+    s2 = project_to_screen(*p2)
+    s3 = project_to_screen(*p3)
+
+    # Ordena por y de tela
+    verts = sorted([(s1, p1, n1), (s2, p2, n2), (s3, p3, n3)],
+                   key=lambda v: v[0][1])
+
+    (x1_s, y1_s, _), P1, N1 = verts[0]
+    (x2_s, y2_s, _), P2, N2 = verts[1]
+    (x3_s, y3_s, _), P3, N3 = verts[2]
+
+    y_min = int(math.floor(y1_s))
+    y_max = int(math.ceil(y3_s))
+
+    # Função que verifica se scanline cruza aresta e retorna interseção
+    def edge_intersection(sA, PA, NA, sB, PB, NB, y):
+        xA, yA, _ = sA
+        xB, yB, _ = sB
+        if yA == yB:
+            return None
+        # Verifica se y está entre yA e yB (intervalo semi-aberto)
+        if (y < min(yA, yB)) or (y >= max(yA, yB)):
+            return None
+        t = (y - yA) / (yB - yA)
+        x = xA + t * (xB - xA)
+        P = [PA[i] + t*(PB[i]-PA[i]) for i in range(3)]
+        N = [NA[i] + t*(NB[i]-NA[i]) for i in range(3)]
+        return x, P, N
+
+    # Durante Phong via software, desativamos o lighting do OpenGL
+    glDisable(GL_LIGHTING)
+
+    for y in range(y_min, y_max + 1):
+        intersecoes = []
+
+        e = edge_intersection(verts[0][0], P1, N1, verts[1][0], P2, N2, y)
+        if e is not None:
+            intersecoes.append(e)
+
+        e = edge_intersection(verts[1][0], P2, N2, verts[2][0], P3, N3, y)
+        if e is not None:
+            intersecoes.append(e)
+
+        e = edge_intersection(verts[2][0], P3, N3, verts[0][0], P1, N1, y)
+        if e is not None:
+            intersecoes.append(e)
+
+        if len(intersecoes) < 2:
+            continue
+
+        intersecoes.sort(key=lambda x: x[0])
+        xL, PL, NL = intersecoes[0]
+        xR, PR, NR = intersecoes[1]
+
+        if xL == xR:
+            continue
+
+        x_start = int(math.floor(xL))
+        x_end = int(math.ceil(xR))
+
+        glBegin(GL_POINTS)
+        for x in range(x_start, x_end+1):
+            t = (x - xL) / (xR - xL + 1e-9)
+
+            P = [PL[i] + t*(PR[i]-PL[i]) for i in range(3)]
+            N = [NL[i] + t*(NR[i]-NL[i]) for i in range(3)]
+
+            # Normalizar N
+            L = math.sqrt(N[0]*N[0] + N[1]*N[1] + N[2]*N[2])
+            if L != 0:
+                N = [N[0]/L, N[1]/L, N[2]/L]
+            else:
+                N = [0.0, 0.0, 1.0]
+
+            cor = phong_shading_point(P, N, base_color)
+            glColor3f(*cor)
+            glVertex3f(P[0], P[1], P[2])
+        glEnd()
+
+    glEnable(GL_LIGHTING)
+
+
+# ==========================================
+# Inicialização OpenGL + Funções do Trabalho
+# ==========================================
 def init():
-    """Configurações iniciais do OpenGL"""
     glClearColor(0.0, 0.0, 0.0, 1.0)
     glEnable(GL_DEPTH_TEST)
-
-    # Importante para iluminação correta quando usamos escala
-    # (normais são renormalizadas automaticamente)
-    # === NOVO ===
     glEnable(GL_NORMALIZE)
-    
-    # ==========================================
-    # CONFIGURAÇÃO DE LUZ
-    # ==========================================
+
     glEnable(GL_LIGHTING)
     glEnable(GL_LIGHT0)
-    
-    # Cores da Luz
+
     luz_ambiente = [0.2, 0.2, 0.2, 1.0]
     luz_difusa   = [0.7, 0.7, 0.7, 1.0]
     luz_especular= [1.0, 1.0, 1.0, 1.0]
-    
+
     glLightfv(GL_LIGHT0, GL_AMBIENT, luz_ambiente)
     glLightfv(GL_LIGHT0, GL_DIFFUSE, luz_difusa)
     glLightfv(GL_LIGHT0, GL_SPECULAR, luz_especular)
-    
-    # Materiais
+
     glEnable(GL_COLOR_MATERIAL)
     glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE)
 
 
 def configurar_iluminacao_renderizacao():
-    """Aplica o modelo de iluminação escolhido"""
     global modelo_iluminacao
-    
-    if modelo_iluminacao == 0: 
-        # --- FLAT SHADING ---
+
+    if modelo_iluminacao == 0:  # Flat
         glShadeModel(GL_FLAT)
         glMaterialfv(GL_FRONT, GL_SPECULAR, [0, 0, 0, 1])
         glMaterialf(GL_FRONT, GL_SHININESS, 0)
-        
-    elif modelo_iluminacao == 1:
-        # --- GOURAUD ---
+    elif modelo_iluminacao == 1:  # Gouraud
         glShadeModel(GL_SMOOTH)
         glMaterialfv(GL_FRONT, GL_SPECULAR, [0, 0, 0, 1])
         glMaterialf(GL_FRONT, GL_SHININESS, 0)
-        
-    elif modelo_iluminacao == 2:
-        # --- PHONG (Simulado: suave + especular forte) ---
+    elif modelo_iluminacao == 2:  # Phong (software)
         glShadeModel(GL_SMOOTH)
         glMaterialfv(GL_FRONT, GL_SPECULAR, [1, 1, 1, 1])
         glMaterialf(GL_FRONT, GL_SHININESS, 60.0)
 
 
 def calcular_normal_face(p1, p2, p3):
-    """Calcula a normal de uma face triangular"""
     v1 = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]]
     v2 = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]]
-    
-    # Produto vetorial
-    nx = v1[1] * v2[2] - v1[2] * v2[1]
-    ny = v1[2] * v2[0] - v1[0] * v2[2]
-    nz = v1[0] * v2[1] - v1[1] * v2[0]
-    
-    # Normalizar
+
+    nx = v1[1]*v2[2] - v1[2]*v2[1]
+    ny = v1[2]*v2[0] - v1[0]*v2[2]
+    nz = v1[0]*v2[1] - v1[1]*v2[0]
+
     length = math.sqrt(nx*nx + ny*ny + nz*nz)
     if length > 0:
         return [nx/length, ny/length, nz/length]
@@ -122,68 +278,63 @@ def calcular_normal_face(p1, p2, p3):
 
 
 def desenhar_perfil_2d():
-    """Desenha o perfil 2D como linhas no plano XY"""
     global perfil_extrusao
-    
+
     if len(perfil_extrusao) < 2:
         return
-    
+
     glDisable(GL_LIGHTING)
-    glColor3f(1.0, 1.0, 0.0)  # Amarelo para o perfil 2D
+    glColor3f(1.0, 1.0, 0.0)
     glLineWidth(2.0)
-    
-    # Desenha as linhas conectando os pontos
+
     glBegin(GL_LINE_STRIP)
     for ponto in perfil_extrusao:
         glVertex3f(ponto[0], ponto[1], 0.0)
     glEnd()
-    
-    # Desenha pontos como pequenas esferas
+
     for ponto in perfil_extrusao:
         glPushMatrix()
         glTranslatef(ponto[0], ponto[1], 0.0)
         glutSolidSphere(0.05, 8, 8)
         glPopMatrix()
-    
+
     glEnable(GL_LIGHTING)
     glLineWidth(1.0)
 
 
 def desenhar_extrusao():
-    """Desenha o objeto extrudado a partir do perfil"""
-    global perfil_extrusao, altura_extrusao, num_segmentos_extrusao, modo_wireframe, extrusao_ativa, modelo_iluminacao
-    
-    # Se a extrusão não está ativa, mostra apenas o perfil 2D
+    global perfil_extrusao, altura_extrusao, num_segmentos_extrusao
+    global modo_wireframe, extrusao_ativa, modelo_iluminacao
+
+    base_color = (0.0, 0.8, 0.3)
+
     if not extrusao_ativa:
         desenhar_perfil_2d()
         return
-    
+
     if len(perfil_extrusao) < 3:
-        # Se não há pontos suficientes, mostra apenas o perfil 2D
         desenhar_perfil_2d()
         return
-    
-    glColor3f(0.0, 0.8, 0.3)  # Verde para o objeto extrudado
-    
-    # Fechar o perfil se não estiver fechado
+
+    # Fecha perfil
     perfil = perfil_extrusao.copy()
     if perfil[0] != perfil[-1]:
         perfil.append(perfil[0])
-    
+
     num_pontos = len(perfil)
     num_segmentos = num_segmentos_extrusao
-    
+
     if modo_wireframe:
         glDisable(GL_LIGHTING)
-        # Desenha apenas as arestas
+        glColor3f(*base_color)
+
         for i in range(num_segmentos + 1):
             z = (i / num_segmentos) * altura_extrusao
             glBegin(GL_LINE_LOOP)
             for ponto in perfil:
                 glVertex3f(ponto[0], ponto[1], z)
             glEnd()
-        
-        # Desenha linhas verticais conectando os pontos
+
         for ponto in perfil:
             glBegin(GL_LINE_STRIP)
             for i in range(num_segmentos + 1):
@@ -191,266 +342,203 @@ def desenhar_extrusao():
                 glVertex3f(ponto[0], ponto[1], z)
             glEnd()
         glEnable(GL_LIGHTING)
-    else:
-        # Desenha faces sólidas
+        return
+
+    # --------- MODO SÓLIDO ----------
+    glColor3f(*base_color)
+
+    if modelo_iluminacao != 2:
+        # ====== Flat / Gouraud: usa OpenGL normal ======
         glBegin(GL_TRIANGLES)
-        
-        # Faces laterais (ao longo da extrusão)
+        # Faces laterais
         for i in range(num_segmentos):
             z1 = (i / num_segmentos) * altura_extrusao
             z2 = ((i + 1) / num_segmentos) * altura_extrusao
-            
+
             for j in range(num_pontos - 1):
-                # Dois triângulos por face lateral
-                p1 = [perfil[j][0], perfil[j][1], z1]
-                p2 = [perfil[j+1][0], perfil[j+1][1], z1]
-                p3 = [perfil[j][0], perfil[j][1], z2]
-                p4 = [perfil[j+1][0], perfil[j+1][1], z2]
-                
-                # Calcula normais para melhor iluminação
-                # Normal do triângulo 1
+                p1 = [perfil[j][0],     perfil[j][1],     z1]
+                p2 = [perfil[j+1][0],   perfil[j+1][1],   z1]
+                p3 = [perfil[j][0],     perfil[j][1],     z2]
+                p4 = [perfil[j+1][0],   perfil[j+1][1],   z2]
+
                 n1 = calcular_normal_face(p1, p2, p3)
-                # Normal do triângulo 2
                 n2 = calcular_normal_face(p2, p4, p3)
-                
-                # Para Gouraud/Phong, usa normais por vértice
-                # Para Flat, usa normal da face
+
                 if modelo_iluminacao == 0:  # Flat
-                    # Triângulo 1
-                    glNormal3f(n1[0], n1[1], n1[2])
-                    glVertex3f(p1[0], p1[1], p1[2])
-                    glVertex3f(p2[0], p2[1], p2[2])
-                    glVertex3f(p3[0], p3[1], p3[2])
-                    
-                    # Triângulo 2
-                    glNormal3f(n2[0], n2[1], n2[2])
-                    glVertex3f(p2[0], p2[1], p2[2])
-                    glVertex3f(p4[0], p4[1], p4[2])
-                    glVertex3f(p3[0], p3[1], p3[2])
-                else:  # Gouraud ou Phong - normais por vértice
-                    # Triângulo 1 - cada vértice com sua normal
-                    glNormal3f(n1[0], n1[1], n1[2])
-                    glVertex3f(p1[0], p1[1], p1[2])
-                    glNormal3f(n1[0], n1[1], n1[2])
-                    glVertex3f(p2[0], p2[1], p2[2])
-                    glNormal3f(n1[0], n1[1], n1[2])
-                    glVertex3f(p3[0], p3[1], p3[2])
-                    
-                    # Triângulo 2
-                    glNormal3f(n2[0], n2[1], n2[2])
-                    glVertex3f(p2[0], p2[1], p2[2])
-                    glNormal3f(n2[0], n2[1], n2[2])
-                    glVertex3f(p4[0], p4[1], p4[2])
-                    glNormal3f(n2[0], n2[1], n2[2])
-                    glVertex3f(p3[0], p3[1], p3[2])
-        
-        # Face inferior (base)
+                    glNormal3f(*n1)
+                    glVertex3f(*p1); glVertex3f(*p2); glVertex3f(*p3)
+                    glNormal3f(*n2)
+                    glVertex3f(*p2); glVertex3f(*p4); glVertex3f(*p3)
+                else:  # Gouraud (mas com mesma normal por vértice)
+                    glNormal3f(*n1)
+                    glVertex3f(*p1)
+                    glNormal3f(*n1)
+                    glVertex3f(*p2)
+                    glNormal3f(*n1)
+                    glVertex3f(*p3)
+
+                    glNormal3f(*n2)
+                    glVertex3f(*p2)
+                    glNormal3f(*n2)
+                    glVertex3f(*p4)
+                    glNormal3f(*n2)
+                    glVertex3f(*p3)
+
+        # Base inferior
         if num_pontos > 2:
             z_base = 0.0
             for j in range(1, num_pontos - 1):
-                p1 = [perfil[0][0], perfil[0][1], z_base]
-                p2 = [perfil[j][0], perfil[j][1], z_base]
+                p1 = [perfil[0][0],   perfil[0][1],   z_base]
+                p2 = [perfil[j][0],   perfil[j][1],   z_base]
                 p3 = [perfil[j+1][0], perfil[j+1][1], z_base]
-                
-                normal = calcular_normal_face(p1, p3, p2)  # Invertido para normal apontar para baixo
-                glNormal3f(normal[0], normal[1], normal[2])
-                glVertex3f(p1[0], p1[1], p1[2])
-                glVertex3f(p2[0], p2[1], p2[2])
-                glVertex3f(p3[0], p3[1], p3[2])
-        
-        # Face superior (topo)
+                normal = calcular_normal_face(p1, p3, p2)
+                glNormal3f(*normal)
+                glVertex3f(*p1); glVertex3f(*p2); glVertex3f(*p3)
+
+        # Topo
         if num_pontos > 2:
             z_topo = altura_extrusao
             for j in range(1, num_pontos - 1):
-                p1 = [perfil[0][0], perfil[0][1], z_topo]
-                p2 = [perfil[j][0], perfil[j][1], z_topo]
+                p1 = [perfil[0][0],   perfil[0][1],   z_topo]
+                p2 = [perfil[j][0],   perfil[j][1],   z_topo]
                 p3 = [perfil[j+1][0], perfil[j+1][1], z_topo]
-                
                 normal = calcular_normal_face(p1, p2, p3)
-                glNormal3f(normal[0], normal[1], normal[2])
-                glVertex3f(p1[0], p1[1], p1[2])
-                glVertex3f(p2[0], p2[1], p2[2])
-                glVertex3f(p3[0], p3[1], p3[2])
-        
+                glNormal3f(*normal)
+                glVertex3f(*p1); glVertex3f(*p2); glVertex3f(*p3)
+
         glEnd()
+        return
+
+    # ====== MODO PHONG (2): SCANLINE POR TRIÂNGULO ======
+    # Faces laterais
+    for i in range(num_segmentos):
+        z1 = (i / num_segmentos) * altura_extrusao
+        z2 = ((i + 1) / num_segmentos) * altura_extrusao
+
+        for j in range(num_pontos - 1):
+            p1 = [perfil[j][0],     perfil[j][1],     z1]
+            p2 = [perfil[j+1][0],   perfil[j+1][1],   z1]
+            p3 = [perfil[j][0],     perfil[j][1],     z2]
+            p4 = [perfil[j+1][0],   perfil[j+1][1],   z2]
+
+            n1 = calcular_normal_face(p1, p2, p3)
+            n2 = calcular_normal_face(p2, p4, p3)
+
+            # Triângulo 1: p1,p2,p3
+            scanline_phong_triangle(p1, n1, p2, n1, p3, n1, base_color)
+            # Triângulo 2: p2,p4,p3
+            scanline_phong_triangle(p2, n2, p4, n2, p3, n2, base_color)
+
+    # Base inferior
+    if num_pontos > 2:
+        z_base = 0.0
+        for j in range(1, num_pontos - 1):
+            p1 = [perfil[0][0],   perfil[0][1],   z_base]
+            p2 = [perfil[j][0],   perfil[j][1],   z_base]
+            p3 = [perfil[j+1][0], perfil[j+1][1], z_base]
+            n = calcular_normal_face(p1, p3, p2)
+            scanline_phong_triangle(p1, n, p2, n, p3, n, base_color)
+
+    # Topo
+    if num_pontos > 2:
+        z_topo = altura_extrusao
+        for j in range(1, num_pontos - 1):
+            p1 = [perfil[0][0],   perfil[0][1],   z_topo]
+            p2 = [perfil[j][0],   perfil[j][1],   z_topo]
+            p3 = [perfil[j+1][0], perfil[j+1][1], z_topo]
+            n = calcular_normal_face(p1, p2, p3)
+            scanline_phong_triangle(p1, n, p2, n, p3, n, base_color)
 
 
 def adicionar_ponto_perfil(x, y):
-    """Adiciona um ponto ao perfil de extrusão"""
     global perfil_extrusao
-    # Adiciona as coordenadas diretamente
     perfil_extrusao.append((x, y))
     print(f"Ponto adicionado: ({x:.2f}, {y:.2f}). Total: {len(perfil_extrusao)} pontos")
 
 
 def limpar_perfil():
-    """Limpa o perfil de extrusão"""
     global perfil_extrusao
     perfil_extrusao = []
     print("Perfil limpo")
 
 
-def ler_coordenadas_terminal():
-    """Lê coordenadas X e Y do terminal com validação"""
-    global perfil_extrusao
-    
-    # Limites recomendados baseados na escala da cena
-    MIN_COORD = -5.0
-    MAX_COORD = 5.0
-    
-    print("\n" + "="*50)
-    print("   ADICIONAR PONTO AO PERFIL DE EXTRUSAO")
-    print("="*50)
-    print(f"Digite coordenadas entre {MIN_COORD} e {MAX_COORD}")
-    print("(Valores fora do range serao ajustados automaticamente)")
-    print("")
-    
-    try:
-        # Lê coordenada X
-        x_str = input(f"Coordenada X [{MIN_COORD} a {MAX_COORD}]: ")
-        x = float(x_str)
-        
-        # Lê coordenada Y
-        y_str = input(f"Coordenada Y [{MIN_COORD} a {MAX_COORD}]: ")
-        y = float(y_str)
-        
-        # Aplica clamping (validação com limites)
-        x_clamped = max(MIN_COORD, min(MAX_COORD, x))
-        y_clamped = max(MIN_COORD, min(MAX_COORD, y))
-        
-        # Avisa se houve ajuste
-        if x != x_clamped or y != y_clamped:
-            print(f"\n>> Valores ajustados para ficarem dentro do range:")
-            print(f"   Original: ({x:.2f}, {y:.2f})")
-            print(f"   Ajustado: ({x_clamped:.2f}, {y_clamped:.2f})")
-        
-        # Adiciona o ponto ao perfil
-        adicionar_ponto_perfil(x_clamped, y_clamped)
-        print("="*50)
-        glutPostRedisplay()
-        
-    except ValueError:
-        print("\n>> ERRO: Digite numeros validos!")
-        print("   Exemplo: 2.5 ou -3.0")
-        print("="*50)
-    except EOFError:
-        print("\n>> Entrada cancelada")
-        print("="*50)
-    except KeyboardInterrupt:
-        print("\n>> Entrada cancelada")
-        print("="*50)
-
-
-def listar_coordenadas_terminal():
-    """Lista todas as coordenadas do perfil no terminal"""
-    global perfil_extrusao
-    
-    print("\n" + "="*50)
-    print("   PONTOS DO PERFIL DE EXTRUSAO")
-    print("="*50)
-    
-    if len(perfil_extrusao) == 0:
-        print("  Nenhum ponto adicionado ainda.")
-        print("  Use a tecla [X] para adicionar pontos.")
-    else:
-        print(f"  Total de pontos: {len(perfil_extrusao)}")
-        print("")
-        print("  #  |    X    |    Y    ")
-        print("  ---+----------+---------")
-        for i, (x, y) in enumerate(perfil_extrusao, 1):
-            print(f"  {i:2d} | {x:7.2f} | {y:7.2f}")
-    
-    print("="*50)
-
-# === NOVO: cubo com normais explícitas para Phong (modo 2) ===
 def desenhar_cubo_phong():
-    # Cubo de lado 2, centrado na origem, vértices em +/-1
     glBegin(GL_QUADS)
-    
-    # Frente (z = 1)
     glNormal3f(0.0, 0.0, 1.0)
     glVertex3f(-1.0, -1.0,  1.0)
     glVertex3f( 1.0, -1.0,  1.0)
     glVertex3f( 1.0,  1.0,  1.0)
     glVertex3f(-1.0,  1.0,  1.0)
-    
-    # Trás (z = -1)
+
     glNormal3f(0.0, 0.0, -1.0)
     glVertex3f( 1.0, -1.0, -1.0)
     glVertex3f(-1.0, -1.0, -1.0)
     glVertex3f(-1.0,  1.0, -1.0)
     glVertex3f( 1.0,  1.0, -1.0)
-    
-    # Direita (x = 1)
+
     glNormal3f(1.0, 0.0, 0.0)
     glVertex3f( 1.0, -1.0,  1.0)
     glVertex3f( 1.0, -1.0, -1.0)
     glVertex3f( 1.0,  1.0, -1.0)
     glVertex3f( 1.0,  1.0,  1.0)
-    
-    # Esquerda (x = -1)
+
     glNormal3f(-1.0, 0.0, 0.0)
     glVertex3f(-1.0, -1.0, -1.0)
     glVertex3f(-1.0, -1.0,  1.0)
     glVertex3f(-1.0,  1.0,  1.0)
     glVertex3f(-1.0,  1.0, -1.0)
-    
-    # Topo (y = 1)
+
     glNormal3f(0.0, 1.0, 0.0)
     glVertex3f(-1.0,  1.0,  1.0)
     glVertex3f( 1.0,  1.0,  1.0)
     glVertex3f( 1.0,  1.0, -1.0)
     glVertex3f(-1.0,  1.0, -1.0)
-    
-    # Base (y = -1)
+
     glNormal3f(0.0, -1.0, 0.0)
     glVertex3f(-1.0, -1.0, -1.0)
     glVertex3f( 1.0, -1.0, -1.0)
     glVertex3f( 1.0, -1.0,  1.0)
     glVertex3f(-1.0, -1.0,  1.0)
-    
     glEnd()
 
 
 def desenhar_objeto():
-    """Desenha o objeto padrão selecionado"""
     global objeto_selecionado, modo_wireframe, modo_extrusao, modelo_iluminacao
-    
+
     if modo_extrusao:
         desenhar_extrusao()
         return
-    
-    glColor3f(0.0, 0.5, 1.0) # Azul
-    
-    if objeto_selecionado == 1:  # Esfera
+
+    glColor3f(0.0, 0.5, 1.0)
+
+    if objeto_selecionado == 1:
         if modo_wireframe:
             glutWireSphere(1.0, 10, 10)
         else:
             glutSolidSphere(1.0, 20, 20)
-    
-    elif objeto_selecionado == 2:  # Cubo
+
+    elif objeto_selecionado == 2:
         if modo_wireframe:
             glutWireCube(2.0)
         else:
-            # Em modo Phong, usamos nosso cubo com normais + material especular
             if modelo_iluminacao == 2:
                 desenhar_cubo_phong()
             else:
                 glutSolidCube(2.0)
-    
-    elif objeto_selecionado == 3:  # Cone
+
+    elif objeto_selecionado == 3:
         if modo_wireframe:
             glutWireCone(1.0, 2.0, 15, 15)
         else:
             glutSolidCone(1.0, 2.0, 15, 15)
-    
-    elif objeto_selecionado == 4:  # Torus
+
+    elif objeto_selecionado == 4:
         if modo_wireframe:
             glutWireTorus(0.5, 1.0, 15, 15)
         else:
             glutSolidTorus(0.5, 1.0, 15, 15)
-    
-    elif objeto_selecionado == 5:  # Teapot
+
+    elif objeto_selecionado == 5:
         if modo_wireframe:
             glutWireTeapot(1.0)
         else:
@@ -458,88 +546,66 @@ def desenhar_objeto():
 
 
 def atualizar_camera():
-    """Atualiza a posição e direção da câmera baseado em yaw e pitch"""
     global camera_x, camera_y, camera_z, camera_yaw, camera_pitch
-    
-    # Calcula a direção da câmera baseado no yaw e pitch
+
     yaw_rad = math.radians(camera_yaw)
     pitch_rad = math.radians(camera_pitch)
-    
-    # Direção para onde a câmera está olhando
+
     direcao_x = math.cos(pitch_rad) * math.sin(yaw_rad)
     direcao_y = math.sin(pitch_rad)
     direcao_z = math.cos(pitch_rad) * math.cos(yaw_rad)
-    
-    # Ponto para onde a câmera está olhando
+
     look_at_x = camera_x + direcao_x
     look_at_y = camera_y + direcao_y
     look_at_z = camera_z + direcao_z
-    
-    # Aplica a transformação da câmera
+
     gluLookAt(camera_x, camera_y, camera_z,
               look_at_x, look_at_y, look_at_z,
               0.0, 1.0, 0.0)
 
 
 def mover_camera_frente():
-    """Move a câmera para frente baseado na direção atual"""
-    global camera_x, camera_y, camera_z, camera_yaw, camera_pitch, velocidade_camera
-    
+    global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
     yaw_rad = math.radians(camera_yaw)
-    
-    # Move apenas no plano horizontal
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
 
 
 def mover_camera_tras():
-    """Move a câmera para trás baseado na direção atual"""
-    global camera_x, camera_y, camera_z, camera_yaw, camera_pitch, velocidade_camera
-    
+    global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
     yaw_rad = math.radians(camera_yaw)
-    
-    # Move apenas no plano horizontal
     camera_x -= math.sin(yaw_rad) * velocidade_camera
     camera_z -= math.cos(yaw_rad) * velocidade_camera
 
 
 def mover_camera_esquerda():
-    """Move a câmera para a esquerda"""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
-    
-    yaw_rad = math.radians(camera_yaw + 90)  # 90 graus à direita
-    
+    yaw_rad = math.radians(camera_yaw + 90)
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
 
 
 def mover_camera_direita():
-    """Move a câmera para a direita"""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
-    
-    yaw_rad = math.radians(camera_yaw - 90)  # 90 graus à esquerda
-    
+    yaw_rad = math.radians(camera_yaw - 90)
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
 
 
-# === NOVO: funções para desenhar texto 2D (HUD) ===
 def desenhar_texto_2d(x, y, texto):
-    """Desenha texto 2D usando coordenadas de janela (pixels)"""
     glRasterPos2f(x, y)
     for ch in texto:
         glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
 
 
 def desenhar_hud():
-    """Desenha informações de comandos na tela"""
     global mostrar_comandos, modo_camera, modelo_iluminacao
-    global modo_wireframe, projecao_ortografica, modo_extrusao, extrusao_ativa, objeto_selecionado
+    global modo_wireframe, projecao_ortografica, modo_extrusao
+    global extrusao_ativa, objeto_selecionado
 
     if not mostrar_comandos:
         return
 
-    # Salva matrizes e estado
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
@@ -547,7 +613,6 @@ def desenhar_hud():
     width = glutGet(GLUT_WINDOW_WIDTH)
     height = glutGet(GLUT_WINDOW_HEIGHT)
 
-    # Projeção ortográfica em coordenadas de janela
     glOrtho(0, width, 0, height, -1, 1)
 
     glMatrixMode(GL_MODELVIEW)
@@ -556,14 +621,13 @@ def desenhar_hud():
 
     glDisable(GL_LIGHTING)
     glDisable(GL_DEPTH_TEST)
-
     glColor3f(1.0, 1.0, 1.0)
 
     y = height - 20
     x = 10
 
     modo_str = "CAMERA" if modo_camera else "OBJETO"
-    modos_ilum = ["Flat", "Gouraud", "Phong"]
+    modos_ilum = ["Flat", "Gouraud", "Phong (Scanline)"]
     ilum_str = modos_ilum[modelo_iluminacao]
     wire_str = "Wireframe" if modo_wireframe else "Solido"
     proj_str = "Ortografica" if projecao_ortografica else "Perspectiva"
@@ -571,13 +635,7 @@ def desenhar_hud():
     if modo_extrusao:
         extru_str = "Perfil 2D" if not extrusao_ativa else "Extrusao 3D"
 
-    obj_nomes = {
-        1: "Esfera",
-        2: "Cubo",
-        3: "Cone",
-        4: "Torus",
-        5: "Teapot"
-    }
+    obj_nomes = {1: "Esfera", 2: "Cubo", 3: "Cone", 4: "Torus", 5: "Teapot"}
     obj_str = obj_nomes.get(objeto_selecionado, "-")
     if modo_extrusao:
         obj_str = "Extrusao"
@@ -587,37 +645,15 @@ def desenhar_hud():
         f"Iluminacao [M]: {ilum_str}   |   Renderizacao [F]: {wire_str}   |   Projecao [P]: {proj_str}",
         f"[0] Camera/Objeto  |  [1-5] Objetos  |  [6] Modo Extrusao ({extru_str})",
         "[WASD] (Obj: rotacao / Cam: movimento)  |  Setas: mover objeto",
-        "[IJKL/UO] mover luz   |   [T] mostrar/ocultar ajuda na tela",
-        "[Extrusao] [X] adiciona ponto  |  [V] lista pontos  |  [E] ativa extrusao  |  [C] limpa  |  [H/N] altura"
+        "[IJKL/UO] mover luz   |   [T] mostrar/ocultar ajuda",
+        "[Extrusao] Clique: adiciona ponto  |  [E] ativa extrusao  |  [C] limpa  |  [H/N] altura",
+        "Modo 2 (Phong): extrusao renderizada por scanline + iluminacao Phong por pixel"
     ]
 
     for linha in linhas:
         desenhar_texto_2d(x, y, linha)
         y -= 20
-    
-    # Se estiver em modo extrusão, mostrar lista de pontos
-    if modo_extrusao and len(perfil_extrusao) > 0:
-        y -= 10  # Espaço extra
-        glColor3f(1.0, 1.0, 0.0)  # Amarelo para destacar
-        desenhar_texto_2d(x, y, f"--- Pontos do Perfil (Total: {len(perfil_extrusao)}) ---")
-        y -= 20
-        
-        glColor3f(0.8, 0.8, 0.8)  # Cinza claro para os pontos
-        # Mostrar até 8 pontos para não poluir a tela
-        pontos_mostrar = min(8, len(perfil_extrusao))
-        for i in range(pontos_mostrar):
-            px, py = perfil_extrusao[i]
-            desenhar_texto_2d(x, y, f"  P{i+1}: ({px:.2f}, {py:.2f})")
-            y -= 18
-        
-        # Se tiver mais pontos, indicar
-        if len(perfil_extrusao) > pontos_mostrar:
-            desenhar_texto_2d(x, y, f"  ... e mais {len(perfil_extrusao) - pontos_mostrar} pontos (pressione [V] para ver todos)")
-            y -= 18
-        
-        glColor3f(1.0, 1.0, 1.0)  # Volta para branco
 
-    # Restaura estado
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_LIGHTING)
 
@@ -631,22 +667,18 @@ def desenhar_hud():
 def display():
     global modo_camera, luz_x, luz_y, luz_z
     global pos_x, pos_y, pos_z, rot_x, rot_y, scale
-    
+
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
-    
-    # 1. Câmera (Móvel ou Fixa dependendo do modo)
+
     if modo_camera:
         atualizar_camera()
     else:
-        # Câmera fixa (modo original)
         gluLookAt(0.0, 0.0, 10.0,  0.0, 0.0, 0.0,  0.0, 1.0, 0.0)
-    
-    # 2. Posicionar a Luz
+
     posicao_luz = [luz_x, luz_y, luz_z, 1.0]
     glLightfv(GL_LIGHT0, GL_POSITION, posicao_luz)
-    
-    # Desenha esfera amarela representando a luz
+
     glPushMatrix()
     glTranslatef(luz_x, luz_y, luz_z)
     glDisable(GL_LIGHTING)
@@ -654,22 +686,18 @@ def display():
     glutSolidSphere(0.2, 10, 10)
     glEnable(GL_LIGHTING)
     glPopMatrix()
-    
-    # 3. Configura Iluminação e Transformações
+
     configurar_iluminacao_renderizacao()
-    
+
     glPushMatrix()
     glTranslatef(pos_x, pos_y, pos_z)
     glRotatef(rot_x, 1.0, 0.0, 0.0)
     glRotatef(rot_y, 0.0, 1.0, 0.0)
     glScalef(scale, scale, scale)
-    
-    # 4. Desenha Objeto
+
     desenhar_objeto()
-    
     glPopMatrix()
 
-    # 5. Desenha HUD com comandos na tela (não interfere na extrusao)
     desenhar_hud()
 
     glutSwapBuffers()
@@ -677,15 +705,15 @@ def display():
 
 def reshape(w, h):
     global projecao_ortografica
-    
-    if h == 0: h = 1
+
+    if h == 0:
+        h = 1
     glViewport(0, 0, w, h)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
-    
-    # Aspect ratio sempre é largura/altura
+
     aspecto = float(w) / float(h)
-    
+
     if projecao_ortografica:
         if w <= h:
             glOrtho(-10, 10, -10/aspecto, 10/aspecto, 0.1, 100.0)
@@ -693,7 +721,7 @@ def reshape(w, h):
             glOrtho(-10*aspecto, 10*aspecto, -10, 10, 0.1, 100.0)
     else:
         gluPerspective(45, aspecto, 0.1, 100.0)
-        
+
     glMatrixMode(GL_MODELVIEW)
 
 
@@ -706,177 +734,115 @@ def keyboard(key, x, y):
     global ultimo_mouse_x, ultimo_mouse_y
     global altura_extrusao
     global mostrar_comandos
-    
-    # Alternar entre modo câmera e modo objeto
+
     if key == b'0':
         modo_camera = not modo_camera
         mouse_capturado = modo_camera
         if modo_camera:
-            print("Modo: CÂMERA (WASD + Mouse)")
-            # Vetor da câmera para o objeto
+            print("Modo: CÂMERA")
             dx = 0.0 - camera_x
             dy = 0.0 - camera_y
             dz = 0.0 - camera_z
-            # Calcula distância horizontal
-            dist_horizontal = math.sqrt(dx * dx + dz * dz)
-            # Calcula yaw (rotação horizontal)
+            dist_horizontal = math.sqrt(dx*dx + dz*dz)
             camera_yaw = math.degrees(math.atan2(dx, dz))
-            # Calcula pitch (rotação vertical)
             camera_pitch = math.degrees(math.atan2(dy, dist_horizontal))
-            # Captura o mouse quando entra no modo câmera
             glutSetCursor(GLUT_CURSOR_NONE)
-            # Inicializa posição do mouse
-            ultimo_mouse_x = glutGet(GLUT_WINDOW_WIDTH) // 2
-            ultimo_mouse_y = glutGet(GLUT_WINDOW_HEIGHT) // 2
+            ultimo_mouse_x = glutGet(GLUT_WINDOW_WIDTH)//2
+            ultimo_mouse_y = glutGet(GLUT_WINDOW_HEIGHT)//2
             glutWarpPointer(ultimo_mouse_x, ultimo_mouse_y)
         else:
-            print("Modo: OBJETO (WASD move objeto)")
+            print("Modo: OBJETO")
             glutSetCursor(GLUT_CURSOR_INHERIT)
         glutPostRedisplay()
         return
-    
-    # Seleção de Objetos Padrões (1-5) e Modo Extrusão (6)
+
     if key == b'1':
-        objeto_selecionado = 1
-        modo_extrusao = False
-        extrusao_ativa = False
-        print("Objeto: Esfera")
+        objeto_selecionado = 1; modo_extrusao = False; extrusao_ativa = False
     elif key == b'2':
-        objeto_selecionado = 2
-        modo_extrusao = False
-        extrusao_ativa = False
-        print("Objeto: Cubo")
+        objeto_selecionado = 2; modo_extrusao = False; extrusao_ativa = False
     elif key == b'3':
-        objeto_selecionado = 3
-        modo_extrusao = False
-        extrusao_ativa = False
-        print("Objeto: Cone")
+        objeto_selecionado = 3; modo_extrusao = False; extrusao_ativa = False
     elif key == b'4':
-        objeto_selecionado = 4
-        modo_extrusao = False
-        extrusao_ativa = False
-        print("Objeto: Torus")
+        objeto_selecionado = 4; modo_extrusao = False; extrusao_ativa = False
     elif key == b'5':
-        objeto_selecionado = 5
-        modo_extrusao = False
-        extrusao_ativa = False
-        print("Objeto: Teapot")
+        objeto_selecionado = 5; modo_extrusao = False; extrusao_ativa = False
     elif key == b'6':
         modo_extrusao = True
-        extrusao_ativa = False  # Começa com extrusão desativada para ver o perfil 2D
-        print("\n" + "="*60)
-        print(">>> MODO EXTRUSÃO ATIVADO <<<")
-        print("="*60)
-        print("Use [X] para adicionar pontos via coordenadas manuais")
-        print("Use [V] para visualizar lista de pontos")
-        print("Controles: [E] Ativar/Desativar extrusão 3D | [C] Limpar perfil")
-        print("           [H] Aumentar altura | [N] Diminuir altura")
-        print("="*60)
-    
-    # Controles WASD - dependem do modo atual
+        extrusao_ativa = False
+        print("Modo Extrusão ativado - clique para adicionar pontos ao perfil")
+
     if modo_camera:
-        # Modo Câmera: WASD move a câmera
-        if key == b'w' or key == b'W':
-            mover_camera_frente()
-        elif key == b's' or key == b'S':
-            mover_camera_tras()
-        elif key == b'a' or key == b'A':
-            mover_camera_esquerda()
-        elif key == b'd' or key == b'D':
-            mover_camera_direita()
+        if key in (b'w', b'W'): mover_camera_frente()
+        elif key in (b's', b'S'): mover_camera_tras()
+        elif key in (b'a', b'A'): mover_camera_esquerda()
+        elif key in (b'd', b'D'): mover_camera_direita()
     else:
-        # Modo Objeto: WASD gira o objeto
-        if key == b'w' or key == b'W': rot_x -= 5.0
-        elif key == b's' or key == b'S': rot_x += 5.0
-        elif key == b'a' or key == b'A': rot_y -= 5.0
-        elif key == b'd' or key == b'D': rot_y += 5.0
-    
-    # Controles que funcionam em ambos os modos
-    if key == b'+': 
+        if key in (b'w', b'W'): rot_x -= 5.0
+        elif key in (b's', b'S'): rot_x += 5.0
+        elif key in (b'a', b'A'): rot_y -= 5.0
+        elif key in (b'd', b'D'): rot_y += 5.0
+
+    if key == b'+':
         scale += 0.1
-    elif key == b'-': 
+    elif key == b'-':
         scale = max(0.1, scale - 0.1)
-    
-    # Luz (IJKL - Movimento da Fonte de Luz)
-    elif key == b'i' or key == b'I': luz_y += 0.5
-    elif key == b'k' or key == b'K': luz_y -= 0.5
-    elif key == b'j' or key == b'J': luz_x -= 0.5
-    elif key == b'l' or key == b'L': luz_x += 0.5
-    elif key == b'u' or key == b'U': luz_z -= 0.5
-    elif key == b'o' or key == b'O': luz_z += 0.5
-    
-    # Configurações
-    elif key == b'p' or key == b'P':
+
+    elif key in (b'i', b'I'): luz_y += 0.5
+    elif key in (b'k', b'K'): luz_y -= 0.5
+    elif key in (b'j', b'J'): luz_x -= 0.5
+    elif key in (b'l', b'L'): luz_x += 0.5
+    elif key in (b'u', b'U'): luz_z -= 0.5
+    elif key in (b'o', b'O'): luz_z += 0.5
+
+    elif key in (b'p', b'P'):
         projecao_ortografica = not projecao_ortografica
         reshape(glutGet(GLUT_WINDOW_WIDTH), glutGet(GLUT_WINDOW_HEIGHT))
-        
-    elif key == b'm' or key == b'M':
-        modelo_iluminacao = (modelo_iluminacao + 1) % 3
-        nomes = ["Flat", "Gouraud", "Phong"]
-        print(f"Modo Iluminacao: {nomes[modelo_iluminacao]}")
-    
-    elif key == b'f' or key == b'F':
-        modo_wireframe = not modo_wireframe
-        print(f"Renderização: {'Wireframe' if modo_wireframe else 'Solid'}")
 
-    # === NOVO: mostrar/ocultar HUD ===
-    elif key == b't' or key == b'T':
+    elif key in (b'm', b'M'):
+        modelo_iluminacao = (modelo_iluminacao + 1) % 3
+        nomes = ["Flat", "Gouraud", "Phong (Scanline)"]
+        print(f"Modo Iluminacao: {nomes[modelo_iluminacao]}")
+
+    elif key in (b'f', b'F'):
+        modo_wireframe = not modo_wireframe
+
+    elif key in (b't', b'T'):
         mostrar_comandos = not mostrar_comandos
 
-    # Controles do Modo Extrusão
     if modo_extrusao:
-        if key == b'x' or key == b'X':
-            # Adicionar ponto via entrada manual no terminal
-            ler_coordenadas_terminal()
-        elif key == b'v' or key == b'V':
-            # Visualizar lista de coordenadas no terminal
-            listar_coordenadas_terminal()
-        elif key == b'e' or key == b'E':
+        if key in (b'e', b'E'):
             extrusao_ativa = not extrusao_ativa
-            if extrusao_ativa:
-                print("Extrusão 3D ATIVADA")
-            else:
-                print("Extrusão 3D DESATIVADA - Modo edição de perfil 2D")
-            glutPostRedisplay()
-        elif key == b'c' or key == b'C':
+            print("Extrusão 3D ATIVADA" if extrusao_ativa else "Extrusão 3D DESATIVADA")
+        elif key in (b'c', b'C'):
             limpar_perfil()
             extrusao_ativa = False
-            glutPostRedisplay()
-        elif key == b'h' or key == b'H':
+        elif key in (b'h', b'H'):
             altura_extrusao += 0.2
             print(f"Altura extrusão: {altura_extrusao:.2f}")
-            glutPostRedisplay()
-        elif key == b'n' or key == b'N':
+        elif key in (b'n', b'N'):
             altura_extrusao = max(0.1, altura_extrusao - 0.2)
             print(f"Altura extrusão: {altura_extrusao:.2f}")
-            glutPostRedisplay()
 
     glutPostRedisplay()
 
 
 def mouse_motion(x, y):
-    """Função chamada quando o mouse se move"""
     global camera_yaw, camera_pitch, ultimo_mouse_x, ultimo_mouse_y
     global mouse_capturado, sensibilidade_mouse, modo_camera
-    
+
     if not modo_camera or not mouse_capturado:
         return
-    
-    # Calcula a diferença de movimento
+
     dx = x - ultimo_mouse_x
     dy = y - ultimo_mouse_y
-    
-    # Atualiza yaw e pitch
+
     camera_yaw -= dx * sensibilidade_mouse
     camera_pitch -= dy * sensibilidade_mouse
-    
-    # Limita o pitch para evitar rotação completa
     camera_pitch = max(-89.0, min(89.0, camera_pitch))
-    
-    # Mantém o mouse no centro da tela
+
     centro_x = glutGet(GLUT_WINDOW_WIDTH) // 2
     centro_y = glutGet(GLUT_WINDOW_HEIGHT) // 2
-    
+
     if abs(x - centro_x) > 50 or abs(y - centro_y) > 50:
         glutWarpPointer(centro_x, centro_y)
         ultimo_mouse_x = centro_x
@@ -884,7 +850,7 @@ def mouse_motion(x, y):
     else:
         ultimo_mouse_x = x
         ultimo_mouse_y = y
-    
+
     glutPostRedisplay()
 
 
@@ -898,47 +864,56 @@ def special_keys(key, x, y):
 
 
 def mouse_click_extrusao(button, state, x, y):
-    """Função desabilitada - entrada de pontos agora é apenas via teclado"""
-    # Sistema de clique do mouse removido para maior precisão
-    # Use a tecla X para adicionar pontos manualmente via terminal
-    pass
+    global modo_extrusao, projecao_ortografica
+
+    if not modo_extrusao:
+        return
+
+    if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
+        width = glutGet(GLUT_WINDOW_WIDTH)
+        height = glutGet(GLUT_WINDOW_HEIGHT)
+        aspecto = float(width) / float(height)
+
+        x_norm = (x / width) * 2.0 - 1.0
+        y_norm = ((height - y) / height) * 2.0 - 1.0
+
+        escala = 5.0
+        if projecao_ortografica:
+            if width <= height:
+                x_world = x_norm * escala
+                y_world = y_norm * (escala / aspecto)
+            else:
+                x_world = x_norm * (escala * aspecto)
+                y_world = y_norm * escala
+        else:
+            x_world = x_norm * escala * aspecto
+            y_world = y_norm * escala
+
+        adicionar_ponto_perfil(x_world, y_world)
+        glutPostRedisplay()
 
 
 def main():
     glutInit(sys.argv)
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
     glutInitWindowSize(800, 600)
-    glutCreateWindow(b"Trabalho CG 3D")
+    glutCreateWindow(b"Trabalho CG 3D - Scanline Phong")
     init()
     glutDisplayFunc(display)
     glutReshapeFunc(reshape)
     glutKeyboardFunc(keyboard)
     glutSpecialFunc(special_keys)
-    glutPassiveMotionFunc(mouse_motion)  # Para capturar movimento do mouse (câmera)
-    
-    print("=" * 60)
-    print("              TRABALHO CG 3D - CONTROLES")
-    print("=" * 60)
-    print("\n--- CONTROLES GERAIS ---")
-    print("[0] Alternar entre Modo Câmera e Modo Objeto")
-    print("[1-5] Selecionar Objeto Padrão | [6] Modo Extrusão")
-    print("[WASD] Girar Objeto (Modo Objeto) | Mover Câmera (Modo Câmera)")
-    print("[Mouse] Olhar ao redor (apenas Modo Câmera)")
-    print("[Setas] Mover Objeto")
-    print("[IJKL] Mover Luz     | [UO] Luz Z (Fundo/Frente)")
-    print("[M] Modo Iluminação (Flat/Gouraud/Phong)")
-    print("[P] Projeção         | [F] Wireframe/Solid")
-    print("[T] Mostrar/Ocultar comandos na tela")
-    print("\n--- MODO EXTRUSÃO ---")
-    print("[X] Adicionar ponto ao perfil (entrada manual via terminal)")
-    print("[V] Visualizar lista de todos os pontos no terminal")
-    print("[E] Ativar/Desativar extrusão 3D (ver perfil 2D ou objeto 3D)")
-    print("[C] Limpar perfil | [H] Aumentar altura | [N] Diminuir altura")
-    print("\n--- LIMITES DE COORDENADAS ---")
-    print("Range recomendado: X e Y entre -5.0 e 5.0")
-    print("(Valores fora deste range serão ajustados automaticamente)")
-    print("=" * 60)
-    
+    glutPassiveMotionFunc(mouse_motion)
+    glutMouseFunc(mouse_click_extrusao)
+
+    print("--- CONTROLES ---")
+    print("[0] Camera/Objeto")
+    print("[1-5] Objetos | [6] Modo Extrusao")
+    print("Modo 2 (M) = Phong: extrusao via scanline + Phong por pixel")
+    print("[WASD] Rotacao (objeto) ou movimento (camera)")
+    print("[IJKL/UO] mover luz | [P] projecao | [F] Wireframe")
+    print("[T] HUD | [H/N] altura extrusao | [E] ativa extrusao 3D")
+
     glutMainLoop()
 
 
