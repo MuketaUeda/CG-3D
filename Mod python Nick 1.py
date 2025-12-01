@@ -290,6 +290,78 @@ def limpar_perfil():
     print("Perfil limpo")
 
 
+def ler_coordenadas_terminal():
+    """Lê coordenadas X e Y do terminal com validação"""
+    global perfil_extrusao
+    
+    # Limites recomendados baseados na escala da cena
+    MIN_COORD = -5.0
+    MAX_COORD = 5.0
+    
+    print("\n" + "="*50)
+    print("   ADICIONAR PONTO AO PERFIL DE EXTRUSAO")
+    print("="*50)
+    print(f"Digite coordenadas entre {MIN_COORD} e {MAX_COORD}")
+    print("(Valores fora do range serao ajustados automaticamente)")
+    print("")
+    
+    try:
+        # Lê coordenada X
+        x_str = input(f"Coordenada X [{MIN_COORD} a {MAX_COORD}]: ")
+        x = float(x_str)
+        
+        # Lê coordenada Y
+        y_str = input(f"Coordenada Y [{MIN_COORD} a {MAX_COORD}]: ")
+        y = float(y_str)
+        
+        # Aplica clamping (validação com limites)
+        x_clamped = max(MIN_COORD, min(MAX_COORD, x))
+        y_clamped = max(MIN_COORD, min(MAX_COORD, y))
+        
+        # Avisa se houve ajuste
+        if x != x_clamped or y != y_clamped:
+            print(f"\n>> Valores ajustados para ficarem dentro do range:")
+            print(f"   Original: ({x:.2f}, {y:.2f})")
+            print(f"   Ajustado: ({x_clamped:.2f}, {y_clamped:.2f})")
+        
+        # Adiciona o ponto ao perfil
+        adicionar_ponto_perfil(x_clamped, y_clamped)
+        print("="*50)
+        glutPostRedisplay()
+        
+    except ValueError:
+        print("\n>> ERRO: Digite numeros validos!")
+        print("   Exemplo: 2.5 ou -3.0")
+        print("="*50)
+    except EOFError:
+        print("\n>> Entrada cancelada")
+        print("="*50)
+    except KeyboardInterrupt:
+        print("\n>> Entrada cancelada")
+        print("="*50)
+
+
+def listar_coordenadas_terminal():
+    """Lista todas as coordenadas do perfil no terminal"""
+    global perfil_extrusao
+    
+    print("\n" + "="*50)
+    print("   PONTOS DO PERFIL DE EXTRUSAO")
+    print("="*50)
+    
+    if len(perfil_extrusao) == 0:
+        print("  Nenhum ponto adicionado ainda.")
+        print("  Use a tecla [X] para adicionar pontos.")
+    else:
+        print(f"  Total de pontos: {len(perfil_extrusao)}")
+        print("")
+        print("  #  |    X    |    Y    ")
+        print("  ---+----------+---------")
+        for i, (x, y) in enumerate(perfil_extrusao, 1):
+            print(f"  {i:2d} | {x:7.2f} | {y:7.2f}")
+    
+    print("="*50)
+
 # === NOVO: cubo com normais explícitas para Phong (modo 2) ===
 def desenhar_cubo_phong():
     # Cubo de lado 2, centrado na origem, vértices em +/-1
@@ -516,12 +588,34 @@ def desenhar_hud():
         f"[0] Camera/Objeto  |  [1-5] Objetos  |  [6] Modo Extrusao ({extru_str})",
         "[WASD] (Obj: rotacao / Cam: movimento)  |  Setas: mover objeto",
         "[IJKL/UO] mover luz   |   [T] mostrar/ocultar ajuda na tela",
-        "[Extrusao] Clique: adiciona ponto  |  [E] ativa extrusao  |  [C] limpa  |  [H/N] altura"
+        "[Extrusao] [X] adiciona ponto  |  [V] lista pontos  |  [E] ativa extrusao  |  [C] limpa  |  [H/N] altura"
     ]
 
     for linha in linhas:
         desenhar_texto_2d(x, y, linha)
         y -= 20
+    
+    # Se estiver em modo extrusão, mostrar lista de pontos
+    if modo_extrusao and len(perfil_extrusao) > 0:
+        y -= 10  # Espaço extra
+        glColor3f(1.0, 1.0, 0.0)  # Amarelo para destacar
+        desenhar_texto_2d(x, y, f"--- Pontos do Perfil (Total: {len(perfil_extrusao)}) ---")
+        y -= 20
+        
+        glColor3f(0.8, 0.8, 0.8)  # Cinza claro para os pontos
+        # Mostrar até 8 pontos para não poluir a tela
+        pontos_mostrar = min(8, len(perfil_extrusao))
+        for i in range(pontos_mostrar):
+            px, py = perfil_extrusao[i]
+            desenhar_texto_2d(x, y, f"  P{i+1}: ({px:.2f}, {py:.2f})")
+            y -= 18
+        
+        # Se tiver mais pontos, indicar
+        if len(perfil_extrusao) > pontos_mostrar:
+            desenhar_texto_2d(x, y, f"  ... e mais {len(perfil_extrusao) - pontos_mostrar} pontos (pressione [V] para ver todos)")
+            y -= 18
+        
+        glColor3f(1.0, 1.0, 1.0)  # Volta para branco
 
     # Restaura estado
     glEnable(GL_DEPTH_TEST)
@@ -670,8 +764,14 @@ def keyboard(key, x, y):
     elif key == b'6':
         modo_extrusao = True
         extrusao_ativa = False  # Começa com extrusão desativada para ver o perfil 2D
-        print("Modo Extrusão ativado - Clique com o mouse para adicionar pontos ao perfil")
-        print("Controles: [E] Ativar/Desativar extrusão 3D | [C] Limpar perfil | [H] Aumentar altura | [N] Diminuir altura")
+        print("\n" + "="*60)
+        print(">>> MODO EXTRUSÃO ATIVADO <<<")
+        print("="*60)
+        print("Use [X] para adicionar pontos via coordenadas manuais")
+        print("Use [V] para visualizar lista de pontos")
+        print("Controles: [E] Ativar/Desativar extrusão 3D | [C] Limpar perfil")
+        print("           [H] Aumentar altura | [N] Diminuir altura")
+        print("="*60)
     
     # Controles WASD - dependem do modo atual
     if modo_camera:
@@ -725,7 +825,13 @@ def keyboard(key, x, y):
 
     # Controles do Modo Extrusão
     if modo_extrusao:
-        if key == b'e' or key == b'E':
+        if key == b'x' or key == b'X':
+            # Adicionar ponto via entrada manual no terminal
+            ler_coordenadas_terminal()
+        elif key == b'v' or key == b'V':
+            # Visualizar lista de coordenadas no terminal
+            listar_coordenadas_terminal()
+        elif key == b'e' or key == b'E':
             extrusao_ativa = not extrusao_ativa
             if extrusao_ativa:
                 print("Extrusão 3D ATIVADA")
@@ -792,39 +898,10 @@ def special_keys(key, x, y):
 
 
 def mouse_click_extrusao(button, state, x, y):
-    """Manipula cliques do mouse no modo extrusão"""
-    global modo_extrusao, perfil_extrusao, projecao_ortografica
-    
-    if not modo_extrusao:
-        return
-    
-    if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
-        # Converte coordenadas da tela para coordenadas do mundo
-        width = glutGet(GLUT_WINDOW_WIDTH)
-        height = glutGet(GLUT_WINDOW_HEIGHT)
-        aspecto = float(width) / float(height)
-        
-        # Normaliza para [-1, 1]
-        x_norm = (x / width) * 2.0 - 1.0
-        y_norm = ((height - y) / height) * 2.0 - 1.0  # Inverte Y corretamente
-        
-        # Ajusta pelo aspect ratio e usa escala que corresponde ao glOrtho/gluPerspective
-        escala = 5.0
-        if projecao_ortografica:
-            if width <= height:
-                x_world = x_norm * escala
-                y_world = y_norm * (escala / aspecto)
-            else:
-                x_world = x_norm * (escala * aspecto)
-                y_world = y_norm * escala
-        else:
-            # Para perspectiva, aproximação simples
-            x_world = x_norm * escala * aspecto
-            y_world = y_norm * escala
-        
-        # Adiciona diretamente sem escala extra
-        adicionar_ponto_perfil(x_world, y_world)
-        glutPostRedisplay()
+    """Função desabilitada - entrada de pontos agora é apenas via teclado"""
+    # Sistema de clique do mouse removido para maior precisão
+    # Use a tecla X para adicionar pontos manualmente via terminal
+    pass
 
 
 def main():
@@ -837,23 +914,30 @@ def main():
     glutReshapeFunc(reshape)
     glutKeyboardFunc(keyboard)
     glutSpecialFunc(special_keys)
-    glutPassiveMotionFunc(mouse_motion)  # Para capturar movimento do mouse
-    glutMouseFunc(mouse_click_extrusao)  # Para capturar cliques do mouse no modo extrusão
+    glutPassiveMotionFunc(mouse_motion)  # Para capturar movimento do mouse (câmera)
     
-    print("--- CONTROLES ---")
+    print("=" * 60)
+    print("              TRABALHO CG 3D - CONTROLES")
+    print("=" * 60)
+    print("\n--- CONTROLES GERAIS ---")
     print("[0] Alternar entre Modo Câmera e Modo Objeto")
     print("[1-5] Selecionar Objeto Padrão | [6] Modo Extrusão")
     print("[WASD] Girar Objeto (Modo Objeto) | Mover Câmera (Modo Câmera)")
-    print("[Mouse] Olhar ao redor (Modo Câmera) | Clique para adicionar pontos (Modo Extrusão)")
+    print("[Mouse] Olhar ao redor (apenas Modo Câmera)")
     print("[Setas] Mover Objeto")
     print("[IJKL] Mover Luz     | [UO] Luz Z (Fundo/Frente)")
     print("[M] Modo Iluminação (Flat/Gouraud/Phong)")
     print("[P] Projeção         | [F] Wireframe/Solid")
     print("[T] Mostrar/Ocultar comandos na tela")
-    print("--- MODO EXTRUSÃO ---")
-    print("[Clique Esquerdo] Adicionar ponto ao perfil")
+    print("\n--- MODO EXTRUSÃO ---")
+    print("[X] Adicionar ponto ao perfil (entrada manual via terminal)")
+    print("[V] Visualizar lista de todos os pontos no terminal")
     print("[E] Ativar/Desativar extrusão 3D (ver perfil 2D ou objeto 3D)")
     print("[C] Limpar perfil | [H] Aumentar altura | [N] Diminuir altura")
+    print("\n--- LIMITES DE COORDENADAS ---")
+    print("Range recomendado: X e Y entre -5.0 e 5.0")
+    print("(Valores fora deste range serão ajustados automaticamente)")
+    print("=" * 60)
     
     glutMainLoop()
 
