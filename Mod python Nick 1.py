@@ -1,3 +1,22 @@
+"""
+================================================================================
+TRABALHO DE COMPUTAÇÃO GRÁFICA 3D
+================================================================================
+
+Sistema interativo de renderização 3D com múltiplos modelos de iluminação,
+câmera em primeira pessoa e sistema de extrusão de polígonos.
+
+Características principais:
+- 3 modelos de iluminação: Flat, Gouraud e Phong
+- Algoritmo Scanline com Phong Shading implementado no cubo
+- Câmera em primeira pessoa com controle de mouse
+- Sistema de extrusão de perfis 2D para objetos 3D
+- 5 objetos 3D pré-definidos + extrusão customizada
+
+Autor: Gabriel B. Rosati e Nicolas 
+Tecnologias: Python 3.x, PyOpenGL, OpenGL 3.3
+================================================================================
+"""
 import sys
 from OpenGL.GL import *
 from OpenGL.GLUT import *
@@ -5,7 +24,7 @@ from OpenGL.GLU import *
 import math
 
 # ==========================================
-# Variáveis Globais
+# VARIÁVEIS GLOBAIS
 # ==========================================
 # Estado do Objeto
 rot_x, rot_y = 0.0, 0.0
@@ -80,48 +99,106 @@ def init():
 
 
 def configurar_iluminacao_renderizacao():
-    """Aplica o modelo de iluminação escolhido na pipeline fixa"""
+    """
+    Configura o modelo de iluminação do OpenGL (pipeline fixa).
+    
+    3 Modelos Implementados:
+    
+    0 - FLAT SHADING:
+        - Uma cor por face (glShadeModel(GL_FLAT))
+        - Sem reflexo especular
+        - Visual "facetado", mostra claramente as faces
+        
+    1 - GOURAUD SHADING:
+        - Cores interpoladas suavemente entre vértices (GL_SMOOTH)
+        - Sem reflexo especular
+        - Visual suave, mas sem brilho
+        
+    2 - PHONG SHADING (simulado):
+        - Para objetos padrão: usa GL_SMOOTH + material especular forte
+        - Para CUBO: usa scanline Phong implementado via software
+        - Reflexos especulares precisos e realistas
+        
+    Nota: O cubo no modo 2 NÃO usa esta função, usa scanline_phong_triangle().
+    """
     global modelo_iluminacao
     
     if modelo_iluminacao == 0: 
-        # FLAT SHADING
+        # FLAT SHADING - Uma cor por face
         glShadeModel(GL_FLAT)
-        glMaterialfv(GL_FRONT, GL_SPECULAR, [0, 0, 0, 1])
+        glMaterialfv(GL_FRONT, GL_SPECULAR, [0, 0, 0, 1])  # Sem especular
         glMaterialf(GL_FRONT, GL_SHININESS, 0)
         
     elif modelo_iluminacao == 1:
-        # GOURAUD
+        # GOURAUD - Interpolação suave de cores, sem especular
         glShadeModel(GL_SMOOTH)
-        glMaterialfv(GL_FRONT, GL_SPECULAR, [0, 0, 0, 1])
+        glMaterialfv(GL_FRONT, GL_SPECULAR, [0, 0, 0, 1])  # Sem especular
         glMaterialf(GL_FRONT, GL_SHININESS, 0)
         
     elif modelo_iluminacao == 2:
-        # PHONG "simulado" na pipeline fixa (para objetos que não usam scanline)
+        # PHONG - Interpolação suave + reflexo especular forte
         glShadeModel(GL_SMOOTH)
-        glMaterialfv(GL_FRONT, GL_SPECULAR, [1, 1, 1, 1])
-        glMaterialf(GL_FRONT, GL_SHININESS, 60.0)
+        glMaterialfv(GL_FRONT, GL_SPECULAR, [1, 1, 1, 1])  # Especular máximo
+        glMaterialf(GL_FRONT, GL_SHININESS, 60.0)  # Alto brilho
 
 
 # ==========================================
-# PROJEÇÃO 3D → 2D (para scanline)
+# PROJEÇÃO 3D → 2D
 # ==========================================
 def project_to_screen(x, y, z):
-    """Projeção de um ponto 3D para coordenadas de janela (x,y)."""
+    """
+    Projeta um ponto 3D para coordenadas de janela 2D (pixels).
+    
+    Usa as matrizes de modelview e projeção atuais do OpenGL para
+    transformar coordenadas 3D do mundo em coordenadas de tela.
+    
+    Args:
+        x, y, z: Coordenadas 3D no espaço do mundo
+        
+    Returns:
+        tuple: (winX, winY, winZ) coordenadas de janela
+               - winX, winY: posição em pixels na tela
+               - winZ: profundidade (para z-buffer)
+               
+    Nota: O eixo Y é invertido para corresponder ao sistema de
+          coordenadas de janela (origem no canto superior esquerdo).
+    """
     model = glGetDoublev(GL_MODELVIEW_MATRIX)
     proj = glGetDoublev(GL_PROJECTION_MATRIX)
     viewport = glGetIntegerv(GL_VIEWPORT)
 
     winX, winY, winZ = gluProject(x, y, z, model, proj, viewport)
-    # Inverte o Y para sistema de janela
+    # Inverte o Y para sistema de janela (Y cresce para baixo)
     winY = viewport[3] - winY
     return winX, winY, winZ
 
 
 # ==========================================
-# ILUMINAÇÃO PHONG POR PIXEL (software)
+# ILUMINAÇÃO PHONG POR PIXEL
 # ==========================================
 def phong_shading_point(position, normal, base_color):
-    """Computa intensidade Phong por ponto (posição + normal interpolada)."""
+    """
+    Calcula a iluminação Phong para um único ponto/pixel.
+    
+    Implementa o modelo de iluminação de Phong completo:
+    I = Ia·ka + Id·kd·(N·L) + Is·ks·(R·V)^shininess
+    
+    Componentes:
+    - Ambiente (Ia): Luz de fundo constante
+    - Difusa (Id): Reflexão difusa proporcional ao ângulo da luz (Lambert)
+    - Especular (Is): Reflexo brilhante dependente do ângulo de visão
+    
+    Args:
+        position: [x, y, z] posição 3D do ponto no espaço do mundo
+        normal: [nx, ny, nz] vetor normal (interpolado) no ponto
+        base_color: (r, g, b) cor base do material
+        
+    Returns:
+        tuple: (r, g, b) cor final iluminada do ponto
+        
+    Nota: Esta função é chamada para CADA PIXEL no algoritmo scanline,
+          tornando-a computacionalmente cara mas visualmente precisa.
+    """
     global luz_x, luz_y, luz_z, modo_camera
     global camera_x, camera_y, camera_z
 
@@ -179,15 +256,37 @@ def phong_shading_point(position, normal, base_color):
 
 
 # ==========================================
-# SCANLINE PHONG EM TRIÂNGULO (software)
+# SCANLINE PHONG EM TRIÂNGULO
 # ==========================================
 def scanline_phong_triangle(p1, n1, p2, n2, p3, n3, base_color):
     """
-    Triângulo definido em 3D, com normais por vértice.
-    1) Projeta para tela
-    2) Faz varredura em y (scanline)
-    3) Interpola P e N
-    4) Calcula Phong ponto a ponto e desenha GL_POINTS
+    Renderiza um triângulo usando o algoritmo Scanline com Phong Shading.
+    
+    Este é um algoritmo de rasterização IMPLEMENTADO EM SOFTWARE (CPU),
+    ao contrário do pipeline de hardware do OpenGL. Permite controle total
+    sobre o processo de iluminação por pixel.
+    
+    ALGORITMO:
+    1. Projeção: Converte vértices 3D (p1, p2, p3) para coordenadas de tela
+    2. Ordenação: Ordena vértices por coordenada Y (de cima para baixo)
+    3. Varredura Y (Scanline):
+       - Para cada linha y do triângulo:
+         a) Calcula intersecções com as 3 arestas
+         b) Interpola posições 3D (P) e normais (N) nas intersecções
+    4. Varredura X (dentro de cada scanline):
+       - Para cada pixel x entre as intersecções:
+         a) Interpola P e N horizontalmente
+         b) Calcula iluminação Phong para P e N interpolados
+         c) Desenha o pixel com a cor calculada
+    
+    Args:
+        p1, p2, p3: Vértices do triângulo [x, y, z] no espaço 3D
+        n1, n2, n3: Normais dos vértices [nx, ny, nz]
+        base_color: Cor base do material (r, g, b)
+        
+    Complexidade: O(pixels_do_triângulo) - cada pixel é processado individualmente
+    
+    Resultado: Iluminação Phong precisa com reflexos especulares suaves e realistas.
     """
     s1 = project_to_screen(*p1)
     s2 = project_to_screen(*p2)
@@ -272,7 +371,7 @@ def scanline_phong_triangle(p1, n1, p2, n2, p3, n3, base_color):
 
 
 # ==========================================
-# CUBO COM SCANLINE PHONG (somente no modo 2)
+# CUBO COM SCANLINE PHONG
 # ==========================================
 def desenhar_cubo_scanline_phong():
     """Cubo de lado 2 ([-1,1]) desenhado com Phong por scanline."""
@@ -329,18 +428,36 @@ def desenhar_cubo_scanline_phong():
 # AUXILIARES PARA EXTRUSÃO
 # ==========================================
 def calcular_normal_face(p1, p2, p3):
-    """Normal de uma face triangular."""
+    """
+    Calcula o vetor normal de uma face triangular.
+    
+    Usa o produto vetorial (cross product) de dois vetores da face:
+    N = (p2 - p1) × (p3 - p1)
+    
+    O vetor normal é perpendicular à superfície e aponta "para fora" da face.
+    Essencial para cálculos de iluminação (determina quanto de luz atinge a face).
+    
+    Args:
+        p1, p2, p3: Vértices do triângulo [x, y, z] em ordem anti-horária
+        
+    Returns:
+        list: [nx, ny, nz] vetor normal NORMALIZADO (comprimento = 1)
+              Se degenera (área zero), retorna [0, 0, 1]
+    """
+    # Calcula dois vetores da face
     v1 = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]]
     v2 = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]]
     
+    # Produto vetorial: v1 × v2
     nx = v1[1] * v2[2] - v1[2] * v2[1]
     ny = v1[2] * v2[0] - v1[0] * v2[2]
     nz = v1[0] * v2[1] - v1[1] * v2[0]
     
+    # Normaliza (transforma em vetor unitário)
     length = math.sqrt(nx*nx + ny*ny + nz*nz)
     if length > 0:
         return [nx/length, ny/length, nz/length]
-    return [0, 0, 1]
+    return [0, 0, 1]  # Fallback para face degenerada
 
 
 def desenhar_perfil_2d():
@@ -364,7 +481,31 @@ def desenhar_perfil_2d():
 
 
 def desenhar_extrusao():
-    """Desenha o objeto extrudado SEM scanline (sempre OpenGL normal)."""
+    """
+    Renderiza um objeto 3D gerado por extrusão linear de um perfil 2D.
+    
+    PROCESSO DE EXTRUSÃO:
+    1. Perfil 2D: Lista de pontos (x, y) no plano XY
+    2. Fechamento: Conecta o último ponto ao primeiro automaticamente
+    3. Replicação: Copia o perfil em múltiplos níveis ao longo do eixo Z
+    4. Geração de Faces:
+       - Laterais: Conecta pontos correspondentes entre níveis (quads → triângulos)
+       - Base: Triangulação em leque a partir do ponto [0]
+       - Topo: Triangulação em leque a partir do ponto [0]
+    
+    ESTADOS:
+    - extrusao_ativa = False: Mostra apenas o perfil 2D (linhas amarelas)
+    - extrusao_ativa = True: Renderiza o objeto 3D completo
+    
+    MODOS DE RENDERIZAÇÃO:
+    - Wireframe: Desenha apenas arestas (anéis + verticais)
+    - Sólido: Renderiza faces triangulares com iluminação
+    
+    LIMITAÇÃO: A triangulação em leque funciona melhor para perfis convexos.
+               Perfis côncavos ou auto-intersectantes podem gerar artefatos visuais.
+               
+    Usa: Pipeline fixo do OpenGL (sem scanline)
+    """
     global perfil_extrusao, altura_extrusao
     global num_segmentos_extrusao, modo_wireframe, extrusao_ativa
     
@@ -469,7 +610,7 @@ def limpar_perfil():
 
 
 # ==========================================
-# OBJETOS PADRÃO (1–5) + MODO EXTRUSÃO
+# OBJETOS PADRÃO + EXTRUSÃO
 # ==========================================
 def desenhar_objeto():
     """Desenha o objeto padrão selecionado ou extrusão."""
@@ -513,15 +654,30 @@ def desenhar_objeto():
         if modo_wireframe:
             glutWireTeapot(1.0)
         else:
-            # Teapot usa pipeline fixa (Phong via material, sem scanline)
+            # Teapot
             glutSolidTeapot(1.0)
 
 
 # ==========================================
-# CÂMERA
+# CÂMERA EM PRIMEIRA PESSOA
 # ==========================================
 def atualizar_camera():
-    """Atualiza a posição e direção da câmera baseado em yaw e pitch"""
+    """
+    Atualiza a matriz de visualização para câmera em primeira pessoa.
+    
+    Sistema de rotação:
+    - Yaw (rotação horizontal): Ângulo ao redor do eixo Y (esquerda/direita)
+    - Pitch (rotação vertical): Ângulo ao redor do eixo X (cima/baixo)
+    
+    Converte ângulos Euler (yaw, pitch) em vetor de direção usando trigonometria:
+    - direcao_x = cos(pitch) * sin(yaw)
+    - direcao_y = sin(pitch)
+    - direcao_z = cos(pitch) * cos(yaw)
+    
+    Calcula ponto de foco (look_at) = posição_câmera + direção
+    
+    Aplica transformação usando gluLookAt(eye, center, up)
+    """
     global camera_x, camera_y, camera_z, camera_yaw, camera_pitch
     
     yaw_rad = math.radians(camera_yaw)
@@ -541,13 +697,16 @@ def atualizar_camera():
 
 
 def mover_camera_frente():
+    """Move a câmera para frente na direção em que está olhando (tecla W)."""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
     yaw_rad = math.radians(camera_yaw)
+    # Move apenas no plano XZ (horizontal), Y permanece constante
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
 
 
 def mover_camera_tras():
+    """Move a câmera para trás, oposto à direção de visão (tecla S)."""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
     yaw_rad = math.radians(camera_yaw)
     camera_x -= math.sin(yaw_rad) * velocidade_camera
@@ -555,14 +714,18 @@ def mover_camera_tras():
 
 
 def mover_camera_esquerda():
+    """Movimento lateral para a esquerda (strafe) - tecla A."""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
+    # Adiciona 90° ao yaw para obter direção perpendicular (esquerda)
     yaw_rad = math.radians(camera_yaw + 90)
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
 
 
 def mover_camera_direita():
+    """Movimento lateral para a direita (strafe) - tecla D."""
     global camera_x, camera_y, camera_z, camera_yaw, velocidade_camera
+    # Subtrai 90° do yaw para obter direção perpendicular (direita)
     yaw_rad = math.radians(camera_yaw - 90)
     camera_x += math.sin(yaw_rad) * velocidade_camera
     camera_z += math.cos(yaw_rad) * velocidade_camera
@@ -649,47 +812,71 @@ def desenhar_hud():
 
 
 # ==========================================
-# DISPLAY / RENDER
+# DISPLAY / RENDER (Loop Principal)
 # ==========================================
 def display():
+    """
+    Função principal de renderização, chamada a cada frame.
+    
+    PIPELINE DE RENDERIZAÇÃO:
+    1. Limpa buffers (cor + profundidade)
+    2. Configura câmera (fixa ou primeira pessoa)
+    3. Posiciona fonte de luz
+    4. Desenha indicador visual da luz (esfera amarela)
+    5. Configura modelo de iluminação
+    6. Aplica transformações no objeto (translação, rotação, escala)
+    7. Desenha o objeto selecionado
+    8. Desenha HUD (texto 2D) por cima
+    9. Troca buffers (double buffering)
+    """
     global modo_camera, luz_x, luz_y, luz_z
     global pos_x, pos_y, pos_z, rot_x, rot_y, scale
     
+    # 1. Limpa a tela e o buffer de profundidade
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
     
+    # 2. Configura câmera
     if modo_camera:
+        # Câmera em primeira pessoa (FPS)
         atualizar_camera()
     else:
-        gluLookAt(0.0, 0.0, 10.0,  0.0, 0.0, 0.0,  0.0, 1.0, 0.0)
+        # Câmera fixa olhando para a origem
+        gluLookAt(0.0, 0.0, 10.0,  # Posição da câmera
+                  0.0, 0.0, 0.0,   # Ponto focal (origem)
+                  0.0, 1.0, 0.0)   # Vetor "up" (Y positivo)
     
-    # Luz
-    posicao_luz = [luz_x, luz_y, luz_z, 1.0]
+    # 3. Posiciona a fonte de luz (deve ser após configurar câmera)
+    posicao_luz = [luz_x, luz_y, luz_z, 1.0]  # w=1.0 = luz posicional
     glLightfv(GL_LIGHT0, GL_POSITION, posicao_luz)
     
-    # Esfera amarela indicando a luz
+    # 4. Desenha esfera amarela para visualizar posição da luz
     glPushMatrix()
     glTranslatef(luz_x, luz_y, luz_z)
-    glDisable(GL_LIGHTING)
-    glColor3f(1.0, 1.0, 0.0)
+    glDisable(GL_LIGHTING)  # Esfera não é afetada por iluminação
+    glColor3f(1.0, 1.0, 0.0)  # Amarelo
     glutSolidSphere(0.2, 10, 10)
     glEnable(GL_LIGHTING)
     glPopMatrix()
     
+    # 5. Configura modelo de iluminação (Flat/Gouraud/Phong)
     configurar_iluminacao_renderizacao()
     
+    # 6-7. Aplica transformações e desenha o objeto
     glPushMatrix()
-    glTranslatef(pos_x, pos_y, pos_z)
-    glRotatef(rot_x, 1.0, 0.0, 0.0)
-    glRotatef(rot_y, 0.0, 1.0, 0.0)
-    glScalef(scale, scale, scale)
+    glTranslatef(pos_x, pos_y, pos_z)  # Posição
+    glRotatef(rot_x, 1.0, 0.0, 0.0)    # Rotação X
+    glRotatef(rot_y, 0.0, 1.0, 0.0)    # Rotação Y
+    glScalef(scale, scale, scale)       # Escala uniforme
     
-    desenhar_objeto()
+    desenhar_objeto()  # Desenha objeto selecionado
     
     glPopMatrix()
 
+    # 8. Desenha HUD (interface 2D) por cima da cena 3D
     desenhar_hud()
 
+    # 9. Troca buffers (exibe frame renderizado)
     glutSwapBuffers()
 
 
@@ -904,7 +1091,17 @@ def special_keys(key, x, y):
 
 
 def mouse_click_extrusao(button, state, x, y):
-    """Manipula cliques do mouse no modo extrusão"""
+    """
+    Manipula cliques do mouse para adicionar pontos ao perfil de extrusão.
+    
+    Converte coordenadas de clique (pixels) para coordenadas do mundo 3D:
+    1. Normaliza x, y de pixels para [-1, 1]
+    2. Ajusta pela proporção da tela (aspect ratio)
+    3. Escala para o tamanho da cena (baseado em projeção ortográfica/perspectiva)
+    4. Adiciona o ponto (x_world, y_world) ao perfil 2D
+    
+    Apenas no modo extrusão (tecla [6]) e com botão esquerdo do mouse.
+    """
     global modo_extrusao, projecao_ortografica
     
     if not modo_extrusao:

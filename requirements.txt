@@ -1,0 +1,9 @@
+# Dependências do Projeto CG 3D
+# Python 3.7+
+
+# OpenGL para Python
+PyOpenGL>=3.1.0
+
+# Aceleração de performance (opcional mas recomendado)
+PyOpenGL_accelerate>=3.1.0
+
